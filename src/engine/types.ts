@@ -74,6 +74,8 @@ export interface ScheduleTrigger extends BaseTriggerConfig {
 
 export interface ManualTrigger extends BaseTriggerConfig {
   type: 'manual';
+  catalogId?: string;       // Scopes this manual trigger to a specific catalog
+  catalogName?: string;
   parameters?: {            // Optional parameters that can be passed when manually triggering
     name: string;
     type: 'string' | 'number' | 'boolean';

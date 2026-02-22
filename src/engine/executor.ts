@@ -108,6 +108,15 @@ export class AutomationExecutor {
       manualParameters: parameters,
     };
 
+    // If an itemId is passed, fetch the item so actions with useTriggeredItem work
+    if (parameters?.itemId) {
+      try {
+        event.item = await this.onstaqClient.getItem(parameters.itemId);
+      } catch (err: any) {
+        logger.warn(`Could not fetch item ${parameters.itemId} for manual trigger: ${err.message}`);
+      }
+    }
+
     return this.executeAutomation(automation, event);
   }
 

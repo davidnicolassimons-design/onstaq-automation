@@ -44,6 +44,8 @@ const triggerSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('manual'),
+    catalogId: z.string().uuid().optional(),
+    catalogName: z.string().optional(),
     parameters: z.array(z.object({
       name: z.string(),
       type: z.enum(['string', 'number', 'boolean']),
