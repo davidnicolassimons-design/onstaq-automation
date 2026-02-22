@@ -442,7 +442,7 @@ export class ActionRunner {
       if (ctx.currentItem?.id) return ctx.currentItem.id;
       if (ctx.trigger.item?.id) return ctx.trigger.item.id;
     }
-    throw new Error('Cannot resolve item ID: no itemId, itemKey, or triggered item available');
+    throw new Error('Cannot resolve item ID: no itemId, itemKey, or triggered item available. For manual triggers, pass an itemId or itemKey in the execution parameters.');
   }
 
   private async resolveCatalogId(catalogName: string, workspaceId: string): Promise<string> {
