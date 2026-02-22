@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["automations"]
 }
 
 model Automation {
@@ -25,6 +27,7 @@ model Automation {
 
   @@index([workspaceId])
   @@index([enabled])
+  @@schema("automations")
 }
 
 model Execution {
@@ -43,6 +46,7 @@ model Execution {
   @@index([automationId])
   @@index([status])
   @@index([startedAt])
+  @@schema("automations")
 }
 
 model TriggerState {
@@ -54,6 +58,7 @@ model TriggerState {
   updatedAt      DateTime @updatedAt
 
   @@index([automationId])
+  @@schema("automations")
 }
 
 model WebhookSubscription {
@@ -65,4 +70,6 @@ model WebhookSubscription {
   metadata  Json?    // Optional subscriber metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("automations")
 }

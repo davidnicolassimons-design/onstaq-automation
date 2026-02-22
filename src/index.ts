@@ -22,7 +22,10 @@ async function main() {
   // --- Initialize services ---
   const prisma = new PrismaClient();
   await prisma.$connect();
-  logger.info('Database connected');
+
+  // Ensure the 'automations' PostgreSQL schema exists (needed for multiSchema)
+  await prisma.$executeRawUnsafe('CREATE SCHEMA IF NOT EXISTS automations');
+  logger.info('Database connected (automations schema ready)');
 
   const onstaqClient = new OnstaqClient({
     baseUrl: ONSTAQ_API_URL,

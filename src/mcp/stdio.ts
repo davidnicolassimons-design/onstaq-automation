@@ -13,6 +13,7 @@ import { logger } from '../utils/logger';
 async function main() {
   const prisma = new PrismaClient();
   await prisma.$connect();
+  await prisma.$executeRawUnsafe('CREATE SCHEMA IF NOT EXISTS automations');
 
   const onstaqClient = new OnstaqClient({
     baseUrl: process.env.ONSTAQ_API_URL || 'http://localhost:3000/api/v1',
