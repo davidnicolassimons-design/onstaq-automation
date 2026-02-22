@@ -214,7 +214,11 @@ export class TemplateResolver {
   }
 
   private resolveActionResult(path: string[], ctx: ExecutionContext): any {
-    // action[0].result.field
+    // Smart parser sends just ["action"] — return the full array for chain evaluation
+    if (path.length === 1 && path[0] === 'action') {
+      return ctx.componentResults;
+    }
+    // Legacy: action[0].result.field (dot-split gives "action[0]" as first segment)
     const match = path[0].match(/^action\[(\d+)\]$/);
     if (match) {
       const index = parseInt(match[1], 10);
