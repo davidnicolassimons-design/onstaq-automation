@@ -299,7 +299,7 @@ export class AutomationExecutor {
 
       this.activeExecutions--;
       this.drainQueue();
-      throw err;
+      return execution.id;
     }
   }
 
