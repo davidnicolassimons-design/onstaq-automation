@@ -381,5 +381,521 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
         };
       },
     },
+
+    // ======================================================================
+    // Workspace Management
+    // ======================================================================
+    {
+      name: 'list_workspaces',
+      description: 'List all workspaces the authenticated user has access to.',
+      inputSchema: z.object({}),
+      handler: async () => {
+        const workspaces = await onstaqClient.listWorkspaces();
+        return { workspaces, count: workspaces.length };
+      },
+    },
+
+    {
+      name: 'get_workspace',
+      description: 'Get details of a specific workspace including catalog count.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getWorkspace(input.workspaceId);
+      },
+    },
+
+    {
+      name: 'create_workspace',
+      description: 'Create a new workspace.',
+      inputSchema: z.object({
+        name: z.string().describe('Workspace display name'),
+        key: z.string().describe('Unique short key (e.g. "IT", "HR")'),
+        description: z.string().optional().describe('Workspace description'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createWorkspace(input);
+      },
+    },
+
+    {
+      name: 'update_workspace',
+      description: 'Update workspace name, description, or settings.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID'),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        allowCrossWorkspaceRefs: z.boolean().optional().describe('Allow items to reference catalogs in other workspaces'),
+      }),
+      handler: async (input) => {
+        const { workspaceId, ...data } = input;
+        return onstaqClient.updateWorkspace(workspaceId, data);
+      },
+    },
+
+    {
+      name: 'delete_workspace',
+      description: 'Permanently delete a workspace and all its catalogs, attributes, and items.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID to delete'),
+      }),
+      handler: async (input) => {
+        await onstaqClient.deleteWorkspace(input.workspaceId);
+        return { message: 'Workspace deleted', workspaceId: input.workspaceId };
+      },
+    },
+
+    {
+      name: 'list_workspace_members',
+      description: 'List all members of a workspace with their roles.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID'),
+      }),
+      handler: async (input) => {
+        const members = await onstaqClient.listMembers(input.workspaceId);
+        return { members, count: members.length };
+      },
+    },
+
+    {
+      name: 'add_workspace_member',
+      description: 'Add an existing user to a workspace with a specific role.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID'),
+        userId: z.string().uuid().describe('User ID to add'),
+        role: z.enum(['WORKSPACE_ADMIN', 'ITEM_EDITOR', 'ITEM_VIEWER']).describe('Workspace role'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.addMember(input.workspaceId, input.userId, input.role);
+      },
+    },
+
+    {
+      name: 'update_workspace_member_role',
+      description: 'Change a workspace member\'s role.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string().uuid(),
+        role: z.enum(['WORKSPACE_ADMIN', 'ITEM_EDITOR', 'ITEM_VIEWER']),
+      }),
+      handler: async (input) => {
+        return onstaqClient.updateMemberRole(input.workspaceId, input.userId, input.role);
+      },
+    },
+
+    {
+      name: 'remove_workspace_member',
+      description: 'Remove a member from a workspace.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        await onstaqClient.removeMember(input.workspaceId, input.userId);
+        return { message: 'Member removed' };
+      },
+    },
+
+    {
+      name: 'invite_to_workspace',
+      description: 'Invite a user by email to join a workspace. Creates an invitation link.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid(),
+        email: z.string().email().describe('Email address to invite'),
+        role: z.enum(['WORKSPACE_ADMIN', 'ITEM_EDITOR', 'ITEM_VIEWER']),
+      }),
+      handler: async (input) => {
+        return onstaqClient.inviteToWorkspace(input.workspaceId, input.email, input.role);
+      },
+    },
+
+    {
+      name: 'export_workspace',
+      description: 'Export a workspace configuration (catalogs, attributes, items) as JSON.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        return onstaqClient.exportWorkspace(input.workspaceId);
+      },
+    },
+
+    {
+      name: 'clone_workspace',
+      description: 'Clone a workspace structure (catalogs + attributes) into a new workspace.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Source workspace ID to clone'),
+        name: z.string().describe('Name for the new workspace'),
+        key: z.string().describe('Unique key for the new workspace'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.cloneWorkspace(input.workspaceId, input.name, input.key);
+      },
+    },
+
+    {
+      name: 'create_workspace_from_template',
+      description: 'Create a new workspace from a predefined template. Use list_workspace_templates to see available templates.',
+      inputSchema: z.object({
+        templateId: z.string().describe('Template ID'),
+        name: z.string().describe('Workspace name'),
+        key: z.string().describe('Unique key'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createFromTemplate(input.templateId, input.name, input.key);
+      },
+    },
+
+    {
+      name: 'list_workspace_templates',
+      description: 'List available workspace templates (e.g. IT Asset Management, Project Management).',
+      inputSchema: z.object({}),
+      handler: async () => {
+        return onstaqClient.listTemplates();
+      },
+    },
+
+    // ======================================================================
+    // Catalog Management
+    // ======================================================================
+    {
+      name: 'list_catalogs',
+      description: 'List all catalogs in a workspace. Catalogs are like item types/tables that define the schema for items.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().describe('Workspace ID'),
+      }),
+      handler: async (input) => {
+        const catalogs = await onstaqClient.listCatalogs(input.workspaceId);
+        return { catalogs, count: catalogs.length };
+      },
+    },
+
+    {
+      name: 'get_catalog',
+      description: 'Get full catalog details including all attributes (own + inherited from parent), child types, and item count.',
+      inputSchema: z.object({
+        catalogId: z.string().uuid().describe('Catalog ID'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getCatalog(input.catalogId);
+      },
+    },
+
+    {
+      name: 'create_catalog',
+      description: 'Create a new catalog (item type) in a workspace. Optionally set a parent type for attribute inheritance.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid(),
+        name: z.string().describe('Catalog name (e.g. "Server", "Application")'),
+        description: z.string().optional(),
+        icon: z.string().optional().describe('Lucide icon name (e.g. "server", "monitor")'),
+        position: z.number().optional().describe('Display order'),
+        isAbstract: z.boolean().optional().describe('If true, cannot create items directly — only used as parent type'),
+        parentTypeId: z.string().uuid().optional().describe('Parent catalog ID for attribute inheritance'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createCatalog(input);
+      },
+    },
+
+    {
+      name: 'update_catalog',
+      description: 'Update catalog properties.',
+      inputSchema: z.object({
+        catalogId: z.string().uuid(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        icon: z.string().optional(),
+        position: z.number().optional(),
+        isAbstract: z.boolean().optional(),
+        parentTypeId: z.string().uuid().optional(),
+      }),
+      handler: async (input) => {
+        const { catalogId, ...data } = input;
+        return onstaqClient.updateCatalog(catalogId, data);
+      },
+    },
+
+    {
+      name: 'delete_catalog',
+      description: 'Delete a catalog and all its items. This is irreversible.',
+      inputSchema: z.object({
+        catalogId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        await onstaqClient.deleteCatalog(input.catalogId);
+        return { message: 'Catalog deleted', catalogId: input.catalogId };
+      },
+    },
+
+    // ======================================================================
+    // Attribute Management
+    // ======================================================================
+    {
+      name: 'list_attributes',
+      description: 'List all attributes defined on a catalog.',
+      inputSchema: z.object({
+        catalogId: z.string().uuid().describe('Catalog ID'),
+      }),
+      handler: async (input) => {
+        const attributes = await onstaqClient.listAttributes(input.catalogId);
+        return { attributes, count: attributes.length };
+      },
+    },
+
+    {
+      name: 'get_attribute',
+      description: 'Get full details of a specific attribute.',
+      inputSchema: z.object({
+        attributeId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getAttribute(input.attributeId);
+      },
+    },
+
+    {
+      name: 'create_attribute',
+      description: `Create a new attribute on a catalog.
+
+TYPES: TEXT, TEXTAREA, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, EMAIL, URL, SELECT, MULTI_SELECT, ITEM_REFERENCE, USER, GROUP, ATTACHMENT, IP_ADDRESS, STATUS
+
+For SELECT/MULTI_SELECT: pass config.options (string array)
+For ITEM_REFERENCE: pass config.referenceCatalogId (target catalog UUID)
+For STATUS: configure via catalog statusConfig`,
+      inputSchema: z.object({
+        catalogId: z.string().uuid(),
+        name: z.string().describe('Attribute display name'),
+        type: z.string().describe('Attribute type (TEXT, INTEGER, SELECT, ITEM_REFERENCE, etc.)'),
+        description: z.string().optional(),
+        position: z.number().optional(),
+        isRequired: z.boolean().optional().default(false),
+        isUnique: z.boolean().optional().default(false),
+        isLabel: z.boolean().optional().default(false).describe('If true, value used as item display label'),
+        isEditable: z.boolean().optional().default(true),
+        defaultValue: z.any().optional(),
+        cardinality: z.enum(['SINGLE', 'MULTI']).optional().default('SINGLE'),
+        config: z.record(z.any()).optional().describe('Type-specific config: { options: [...] } for SELECT, { referenceCatalogId: "uuid" } for ITEM_REFERENCE'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createAttribute(input as any);
+      },
+    },
+
+    {
+      name: 'update_attribute',
+      description: 'Update attribute properties. Only specified fields are changed.',
+      inputSchema: z.object({
+        attributeId: z.string().uuid(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        position: z.number().optional(),
+        isRequired: z.boolean().optional(),
+        isUnique: z.boolean().optional(),
+        isLabel: z.boolean().optional(),
+        isEditable: z.boolean().optional(),
+        defaultValue: z.any().optional(),
+        cardinality: z.enum(['SINGLE', 'MULTI']).optional(),
+        config: z.record(z.any()).optional(),
+      }),
+      handler: async (input) => {
+        const { attributeId, ...data } = input;
+        return onstaqClient.updateAttribute(attributeId, data as any);
+      },
+    },
+
+    {
+      name: 'delete_attribute',
+      description: 'Delete an attribute and all its stored values.',
+      inputSchema: z.object({
+        attributeId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        await onstaqClient.deleteAttribute(input.attributeId);
+        return { message: 'Attribute deleted', attributeId: input.attributeId };
+      },
+    },
+
+    // ======================================================================
+    // Item Operations
+    // ======================================================================
+    {
+      name: 'list_items',
+      description: 'List items with pagination, filtering, sorting, and search. Use workspaceId OR catalogId to scope results.',
+      inputSchema: z.object({
+        workspaceId: z.string().uuid().optional().describe('Filter by workspace'),
+        catalogId: z.string().uuid().optional().describe('Filter by catalog'),
+        search: z.string().optional().describe('Full-text search across text attributes'),
+        page: z.number().optional().default(1),
+        limit: z.number().max(100).optional().default(25),
+        sortBy: z.string().optional().describe('Attribute name or @key, @createdAt, @updatedAt'),
+        sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
+        filters: z.array(z.object({
+          attributeId: z.string().describe('Attribute ID to filter on'),
+          operator: z.enum(['contains', 'equals']),
+          value: z.any(),
+        })).optional().describe('Attribute-level filters'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.listItems(input);
+      },
+    },
+
+    {
+      name: 'get_item',
+      description: 'Get complete item details including all attribute values, resolved references, and metadata.',
+      inputSchema: z.object({
+        itemId: z.string().uuid().describe('Item ID'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getItem(input.itemId);
+      },
+    },
+
+    {
+      name: 'create_item',
+      description: 'Create a new item in a catalog. Pass attribute values as { "AttributeName": value } pairs.',
+      inputSchema: z.object({
+        catalogId: z.string().uuid().describe('Catalog to create the item in'),
+        attributes: z.record(z.any()).optional().describe('Attribute values: { "Name": "value", "Priority": "High" }'),
+        status: z.string().optional().describe('Initial status value (must match catalog statusConfig)'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createItem(input.catalogId, input.attributes);
+      },
+    },
+
+    {
+      name: 'update_item',
+      description: 'Update item attribute values. Only specified attributes are changed.',
+      inputSchema: z.object({
+        itemId: z.string().uuid().describe('Item ID to update'),
+        attributes: z.record(z.any()).describe('Attribute values to update: { "Name": "new value" }'),
+        status: z.string().optional().describe('New status value'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.updateItem(input.itemId, input.attributes);
+      },
+    },
+
+    {
+      name: 'delete_item',
+      description: 'Permanently delete an item and all its attribute values, references, and history.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        await onstaqClient.deleteItem(input.itemId);
+        return { message: 'Item deleted', itemId: input.itemId };
+      },
+    },
+
+    {
+      name: 'import_items',
+      description: 'Bulk import items into a catalog. Each row is a { "AttributeName": value } record. Supports create + update (matched by key column).',
+      inputSchema: z.object({
+        catalogId: z.string().uuid(),
+        rows: z.array(z.record(z.any())).describe('Array of item records'),
+        keyColumn: z.string().optional().describe('Column to match existing items for upsert'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.importItems(input.catalogId, input.rows, input.keyColumn);
+      },
+    },
+
+    // ======================================================================
+    // Item References
+    // ======================================================================
+    {
+      name: 'get_item_references',
+      description: 'Get all outbound and inbound explicit references for an item.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getReferences(input.itemId);
+      },
+    },
+
+    {
+      name: 'create_item_reference',
+      description: 'Create an explicit reference from one item to another.',
+      inputSchema: z.object({
+        fromItemId: z.string().uuid().describe('Source item ID'),
+        toItemId: z.string().uuid().describe('Target item ID'),
+        referenceKind: z.enum(['DEPENDENCY', 'INSTALLED', 'LINK', 'OWNERSHIP', 'LOCATED_IN', 'CUSTOM']).optional().default('LINK'),
+        label: z.string().optional().describe('Optional description of this reference'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.createReference(input.fromItemId, input.toItemId, input.referenceKind, input.label);
+      },
+    },
+
+    {
+      name: 'delete_item_reference',
+      description: 'Delete an explicit reference between items.',
+      inputSchema: z.object({
+        itemId: z.string().uuid().describe('The item that owns the reference'),
+        referenceId: z.string().uuid().describe('Reference ID to delete'),
+      }),
+      handler: async (input) => {
+        await onstaqClient.deleteReference(input.itemId, input.referenceId);
+        return { message: 'Reference deleted' };
+      },
+    },
+
+    {
+      name: 'get_back_references',
+      description: 'Get all items that reference a given item, grouped by source catalog.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        return onstaqClient.getBackReferences(input.itemId);
+      },
+    },
+
+    // ======================================================================
+    // Item Comments
+    // ======================================================================
+    {
+      name: 'list_item_comments',
+      description: 'Get all comments on an item.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        const comments = await onstaqClient.getComments(input.itemId);
+        return { comments, count: comments.length };
+      },
+    },
+
+    {
+      name: 'add_item_comment',
+      description: 'Add a comment to an item.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+        body: z.string().describe('Comment text'),
+      }),
+      handler: async (input) => {
+        return onstaqClient.addComment(input.itemId, input.body);
+      },
+    },
+
+    // ======================================================================
+    // Item History
+    // ======================================================================
+    {
+      name: 'get_item_history',
+      description: 'Get the audit log / change history for an item.',
+      inputSchema: z.object({
+        itemId: z.string().uuid(),
+      }),
+      handler: async (input) => {
+        const history = await onstaqClient.getHistory(input.itemId);
+        return { history, count: history.length };
+      },
+    },
   ];
 }
