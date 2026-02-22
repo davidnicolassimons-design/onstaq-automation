@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Automation {
+  id             String      @id @default(uuid())
+  name           String
+  description    String?
+  workspaceId    String      // ONSTAQ workspace ID
+  workspaceKey   String?     // ONSTAQ workspace key (e.g., "CMDB") for display
+  enabled        Boolean     @default(true)
+  trigger        Json        // TriggerConfig
+  conditions     Json?       // ConditionGroup | null
+  actions        Json        // ActionConfig[]
+  executionOrder Int         @default(0)
+  createdBy      String      // ONSTAQ user ID
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  executions     Execution[]
+
+  @@index([workspaceId])
+  @@index([enabled])
+}
+
+model Execution {
+  id              String    @id @default(uuid())
+  automationId    String
+  automation      Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  status          String    // PENDING, RUNNING, SUCCESS, FAILED, SKIPPED
+  triggerData     Json      // Snapshot of what triggered execution
+  conditionResult Json?     // Evaluation details
+  actionResults   Json?     // Per-action results array
+  error           String?
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  durationMs      Int?
+
+  @@index([automationId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+model TriggerState {
+  id             String   @id @default(uuid())
+  automationId   String   @unique
+  lastCheckedAt  DateTime @default(now())
+  lastSeenData   Json?    // e.g., last updatedAt timestamp, last known item keys
+  checksum       String?  // For deduplication
+  updatedAt      DateTime @updatedAt
+
+  @@index([automationId])
+}
+
+model WebhookSubscription {
+  id        String   @id @default(uuid())
+  url       String
+  events    String[] // Event types: item.created, item.updated, etc.
+  secret    String   // HMAC-SHA256 signing secret
+  active    Boolean  @default(true)
+  metadata  Json?    // Optional subscriber metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
