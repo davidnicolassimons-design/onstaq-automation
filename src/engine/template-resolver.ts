@@ -1,38 +1,49 @@
 // =============================================================================
 // Template Variable Resolver
-// Resolves {{variable}} expressions in action configs using execution context
+// Resolves {{variable}} expressions in action configs using execution context.
+// Enhanced with Jira-style smart values: function chaining, blocks, pipes.
 // =============================================================================
 
 import { ExecutionContext } from './types';
 import { OnstaqClient } from '../onstaq/client';
 import { logger } from '../utils/logger';
-
-/**
- * Resolve all template variables in a value.
- * Supports:
- *   {{trigger.item.id}}
- *   {{trigger.item.key}}
- *   {{trigger.item.attributes.AttributeName}}
- *   {{trigger.previous.AttributeName}}
- *   {{trigger.user.name}}
- *   {{trigger.timestamp}}
- *   {{trigger.manualParameters.paramName}}
- *   {{trigger.webhookPayload.field.nested}}
- *   {{env.NOW}}
- *   {{env.TODAY}}
- *   {{context.variables.resultName}}
- *   {{action[0].result.field}}
- *   {{oql:FROM Catalog WHERE ... SELECT COUNT(*)}}
- */
+import {
+  ExpressionParser,
+  ExpressionEvaluator,
+  BlockProcessor,
+  createDefaultRegistry,
+  FunctionRegistry,
+  FunctionContext,
+  LegacyResolver,
+} from './smart-values';
 
 const TEMPLATE_REGEX = /\{\{(.+?)\}\}/g;
 const OQL_PREFIX = 'oql:';
+const BLOCK_TAG_REGEX = /\{\{#(each|if)\s/;
 
 export class TemplateResolver {
   private onstaqClient: OnstaqClient;
+  private parser: ExpressionParser;
+  private evaluator: ExpressionEvaluator;
+  private registry: FunctionRegistry;
+  private blockProcessor: BlockProcessor;
 
   constructor(onstaqClient: OnstaqClient) {
     this.onstaqClient = onstaqClient;
+    this.parser = new ExpressionParser();
+    this.registry = createDefaultRegistry();
+
+    const legacy: LegacyResolver = {
+      resolvePath: (expression, ctx) => this.resolveExpressionLegacy(expression, ctx),
+      resolveOql: (query, ctx) => this.resolveOql(query, ctx),
+      lookupItem: (key, ctx) => this.lookupItem(key, ctx),
+    };
+
+    this.evaluator = new ExpressionEvaluator(this.registry, legacy);
+
+    this.blockProcessor = new BlockProcessor(
+      (expression, ctx) => this.resolveExpressionSmart(expression, ctx),
+    );
   }
 
   /**
@@ -42,13 +53,25 @@ export class TemplateResolver {
     if (!template || typeof template !== 'string') return template;
     if (!template.includes('{{')) return template;
 
-    const matches = [...template.matchAll(TEMPLATE_REGEX)];
-    let result = template;
+    // Phase 1: Process block helpers ({{#each}}, {{#if}}) if present
+    let processed = template;
+    if (BLOCK_TAG_REGEX.test(template)) {
+      processed = await this.blockProcessor.processBlocks(template, ctx);
+    }
+
+    // Phase 2: Resolve individual {{expression}} tokens
+    const matches = [...processed.matchAll(TEMPLATE_REGEX)];
+    let result = processed;
 
     for (const match of matches) {
       const fullMatch = match[0];
       const expression = match[1].trim();
-      const resolved = await this.resolveExpression(expression, ctx);
+
+      if (expression.startsWith('#') || expression.startsWith('/') || expression === 'else') {
+        continue;
+      }
+
+      const resolved = await this.resolveExpressionSmart(expression, ctx);
       result = result.replace(fullMatch, this.stringify(resolved));
     }
 
@@ -81,9 +104,27 @@ export class TemplateResolver {
   }
 
   /**
-   * Resolve a single expression (the part inside {{ }}).
+   * Smart expression resolver: tries the new parser/evaluator first,
+   * falls back to legacy on parse failure for full backward compatibility.
    */
-  private async resolveExpression(expression: string, ctx: ExecutionContext): Promise<any> {
+  private async resolveExpressionSmart(expression: string, ctx: ExecutionContext): Promise<any> {
+    try {
+      const ast = this.parser.parse(expression);
+      const functionContext: FunctionContext = {
+        onstaqClient: this.onstaqClient,
+        executionContext: ctx,
+      };
+      return await this.evaluator.evaluate(ast, ctx, functionContext);
+    } catch (err: any) {
+      logger.debug(`Smart value parse fallback for "${expression}": ${err.message}`);
+      return this.resolveExpressionLegacy(expression, ctx);
+    }
+  }
+
+  /**
+   * Legacy expression resolver (original logic, kept as fallback).
+   */
+  private async resolveExpressionLegacy(expression: string, ctx: ExecutionContext): Promise<any> {
     // OQL inline queries
     if (expression.startsWith(OQL_PREFIX)) {
       return this.resolveOql(expression.slice(OQL_PREFIX.length).trim(), ctx);
@@ -212,6 +253,28 @@ export class TemplateResolver {
     } catch (err: any) {
       logger.error(`OQL template resolution failed for query "${query}": ${err.message}`);
       throw new Error(`OQL template error: ${err.message}`);
+    }
+  }
+
+  /**
+   * Lookup an item by its key (e.g., "TM-1234") for cross-item references.
+   */
+  private async lookupItem(key: string, ctx: ExecutionContext): Promise<any> {
+    try {
+      logger.debug(`Looking up item by key: ${key} (workspace: ${ctx.workspaceId})`);
+      const result = await this.onstaqClient.listItems({
+        key,
+        workspaceId: ctx.workspaceId,
+        limit: 1,
+      });
+      if (result.data && result.data.length > 0) {
+        return result.data[0];
+      }
+      logger.warn(`Item not found for key: ${key}`);
+      return null;
+    } catch (err: any) {
+      logger.error(`Item lookup failed for key "${key}": ${err.message}`);
+      return null;
     }
   }
 
