@@ -114,7 +114,8 @@ export class AutomationExecutor {
       try {
         event.item = await this.onstaqClient.getItem(parameters.itemId);
       } catch (err: any) {
-        logger.warn(`Could not fetch item ${parameters.itemId} for manual trigger: ${err.message}`);
+        logger.error(`Failed to fetch item ${parameters.itemId} for manual trigger: ${err.message}`);
+        throw new Error(`Failed to fetch item by ID "${parameters.itemId}": ${err.message}`);
       }
     } else if (parameters?.itemKey) {
       try {
@@ -122,10 +123,12 @@ export class AutomationExecutor {
         if (items.data.length > 0) {
           event.item = items.data[0];
         } else {
-          logger.warn(`No item found with key ${parameters.itemKey} for manual trigger`);
+          throw new Error(`No item found with key "${parameters.itemKey}" in workspace ${automation.workspaceId}`);
         }
       } catch (err: any) {
-        logger.warn(`Could not fetch item by key ${parameters.itemKey} for manual trigger: ${err.message}`);
+        if (err.message.startsWith('No item found')) throw err;
+        logger.error(`Failed to fetch item by key ${parameters.itemKey}: ${err.message}`);
+        throw new Error(`Failed to fetch item by key "${parameters.itemKey}": ${err.message}`);
       }
     }
 
