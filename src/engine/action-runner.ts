@@ -200,7 +200,7 @@ export class ActionRunner {
     const targetId = await this.resolveItemId(itemId, undefined, useTriggeredItem, ctx);
     const resolvedStatus = await this.templateResolver.resolveString(status, ctx);
 
-    const item = await this.onstaqClient.updateItem(targetId, { STATUS: resolvedStatus });
+    const item = await this.onstaqClient.updateItem(targetId, {}, { status: resolvedStatus });
     logger.info(`Transitioned item ${item.key} to status "${resolvedStatus}"`);
     return { itemId: item.id, itemKey: item.key, status: resolvedStatus };
   }

@@ -330,8 +330,8 @@ export class OnstaqClient {
     return res.data;
   }
 
-  async updateItem(id: string, attributes: Record<string, any>): Promise<Item> {
-    const res = await this.http.put<Item>(`/items/${id}`, { attributes });
+  async updateItem(id: string, attributes: Record<string, any>, extra?: { status?: string | null }): Promise<Item> {
+    const res = await this.http.put<Item>(`/items/${id}`, { attributes, ...extra });
     return res.data;
   }
 
