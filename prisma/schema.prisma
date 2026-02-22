@@ -17,7 +17,7 @@ model Automation {
   workspaceKey   String?     // ONSTAQ workspace key (e.g., "CMDB") for display
   enabled        Boolean     @default(true)
   trigger        Json        // TriggerConfig
-  components     Json        // RuleComponent[]
+  components     Json        @default("[]") // RuleComponent[]
   executionOrder Int         @default(0)
   createdBy      String      // ONSTAQ user ID
   createdAt      DateTime    @default(now())
