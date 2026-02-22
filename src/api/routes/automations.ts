@@ -89,7 +89,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
           conditions: data.conditions as any,
           actions: data.actions as any,
           executionOrder: data.executionOrder,
-          createdBy: req.user!.id,
+          createdBy: req.user?.id || req.body.createdBy || 'system',
         },
       });
 
