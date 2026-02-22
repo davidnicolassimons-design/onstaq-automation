@@ -174,16 +174,30 @@ export class TemplateResolver {
     try {
       // Resolve any nested templates in the OQL query itself
       const resolvedQuery = await this.resolveString(query, ctx);
+      logger.debug(`Resolving inline OQL: ${resolvedQuery} (workspace: ${ctx.workspaceId})`);
+
       const result = await this.onstaqClient.executeOql(resolvedQuery, ctx.workspaceId);
-      // Return the rows (or single value if COUNT etc.)
-      if (result.rows.length === 1 && result.columns.length === 1) {
-        const col = result.columns[0].name;
-        return result.rows[0][col];
+
+      // Defensive: handle missing or unexpected response shape
+      const rows = result?.rows ?? [];
+      const columns = result?.columns ?? [];
+
+      if (rows.length === 0) return null;
+
+      // Single scalar result (e.g. SELECT COUNT(*))
+      if (rows.length === 1 && columns.length === 1) {
+        const col = columns[0].name;
+        return rows[0][col];
       }
-      return result.rows;
+
+      // Single row — return as object
+      if (rows.length === 1) return rows[0];
+
+      // Multiple rows — return as array
+      return rows;
     } catch (err: any) {
-      logger.error(`OQL template resolution failed: ${err.message}`);
-      return `[OQL_ERROR: ${err.message}]`;
+      logger.error(`OQL template resolution failed for query "${query}": ${err.message}`);
+      throw new Error(`OQL template error: ${err.message}`);
     }
   }
 

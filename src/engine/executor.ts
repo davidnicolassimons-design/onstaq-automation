@@ -30,6 +30,7 @@ export class AutomationExecutor {
   private triggerManager: TriggerManager;
   private config: ExecutorConfig;
   private activeExecutions: number = 0;
+  private executionQueue: Array<{ automation: AutomationRule; event: TriggerEvent; resolve: (id: string) => void; reject: (err: Error) => void }> = [];
 
   constructor(prisma: PrismaClient, onstaqClient: OnstaqClient, config?: Partial<ExecutorConfig>) {
     this.prisma = prisma;
@@ -182,10 +183,24 @@ export class AutomationExecutor {
    */
   private async executeAutomation(automation: AutomationRule, event: TriggerEvent): Promise<string> {
     if (this.activeExecutions >= this.config.maxConcurrentExecutions) {
-      logger.warn(`Max concurrent executions reached (${this.config.maxConcurrentExecutions}), skipping`);
-      throw new Error('Max concurrent executions reached');
+      logger.info(`Concurrency limit reached (${this.config.maxConcurrentExecutions}), queuing "${automation.name}" (queue size: ${this.executionQueue.length})`);
+      return new Promise<string>((resolve, reject) => {
+        this.executionQueue.push({ automation, event, resolve, reject });
+      });
     }
 
+    return this.runExecution(automation, event);
+  }
+
+  private async drainQueue(): Promise<void> {
+    while (this.executionQueue.length > 0 && this.activeExecutions < this.config.maxConcurrentExecutions) {
+      const next = this.executionQueue.shift()!;
+      logger.info(`Dequeuing automation "${next.automation.name}" (remaining: ${this.executionQueue.length})`);
+      this.runExecution(next.automation, next.event).then(next.resolve, next.reject);
+    }
+  }
+
+  private async runExecution(automation: AutomationRule, event: TriggerEvent): Promise<string> {
     this.activeExecutions++;
     const startTime = new Date();
 
@@ -231,6 +246,7 @@ export class AutomationExecutor {
 
         logger.info(`Automation ${automation.name} skipped: conditions not met`);
         this.activeExecutions--;
+        this.drainQueue();
         return execution.id;
       }
 
@@ -256,6 +272,7 @@ export class AutomationExecutor {
 
       logger.info(`Automation "${automation.name}" ${finalStatus} in ${Date.now() - startTime.getTime()}ms`);
       this.activeExecutions--;
+      this.drainQueue();
       return execution.id;
     } catch (err: any) {
       // Unexpected error
@@ -272,6 +289,7 @@ export class AutomationExecutor {
       });
 
       this.activeExecutions--;
+      this.drainQueue();
       throw err;
     }
   }

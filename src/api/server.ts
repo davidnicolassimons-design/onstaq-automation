@@ -28,10 +28,31 @@ export function createApiServer(
   app.use(express.json({ limit: '10mb' }));
 
   // --- Health Check (public) ---
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'ok',
+  app.get('/api/health', async (req, res) => {
+    const checks: Record<string, string> = {};
+
+    // Database connectivity check
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      checks.database = 'ok';
+    } catch {
+      checks.database = 'unavailable';
+    }
+
+    // ONSTAQ API connectivity check
+    try {
+      await onstaqClient.health();
+      checks.onstaqApi = 'ok';
+    } catch {
+      checks.onstaqApi = 'unavailable';
+    }
+
+    const allOk = Object.values(checks).every((v) => v === 'ok');
+
+    res.status(allOk ? 200 : 503).json({
+      status: allOk ? 'ok' : 'degraded',
       service: 'onstaq-automations',
+      checks,
       timestamp: new Date().toISOString(),
     });
   });
