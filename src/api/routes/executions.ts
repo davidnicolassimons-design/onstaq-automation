@@ -63,7 +63,7 @@ export function createExecutionsRouter(prisma: PrismaClient): Router {
   router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
     try {
       const execution = await prisma.execution.findUnique({
-        where: { id: req.params.id },
+        where: { id: req.params.id as string },
         include: {
           automation: {
             select: { id: true, name: true, workspaceId: true, trigger: true },
