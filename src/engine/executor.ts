@@ -112,21 +112,28 @@ export class AutomationExecutor {
     // If an itemId or itemKey is passed, fetch the item so actions with useTriggeredItem work
     if (parameters?.itemId) {
       try {
-        event.item = await this.onstaqClient.getItem(parameters.itemId);
+        const item = await this.onstaqClient.getItem(parameters.itemId);
+        if (!item || typeof item === 'string' || !item.id) {
+          throw new Error(`Got invalid response instead of item data — check ONSTAQ_API_URL is pointing to the backend API, not the frontend`);
+        }
+        event.item = item;
       } catch (err: any) {
         logger.error(`Failed to fetch item ${parameters.itemId} for manual trigger: ${err.message}`);
         throw new Error(`Failed to fetch item by ID "${parameters.itemId}": ${err.message}`);
       }
     } else if (parameters?.itemKey) {
       try {
-        const items = await this.onstaqClient.listItems({ key: parameters.itemKey, workspaceId: automation.workspaceId });
-        if (items.data.length > 0) {
-          event.item = items.data[0];
+        const result = await this.onstaqClient.listItems({ key: parameters.itemKey, workspaceId: automation.workspaceId });
+        if (!result || typeof result === 'string' || !Array.isArray(result.data)) {
+          throw new Error(`Got invalid response instead of items list — check ONSTAQ_API_URL is pointing to the backend API, not the frontend`);
+        }
+        if (result.data.length > 0) {
+          event.item = result.data[0];
         } else {
           throw new Error(`No item found with key "${parameters.itemKey}" in workspace ${automation.workspaceId}`);
         }
       } catch (err: any) {
-        if (err.message.startsWith('No item found')) throw err;
+        if (err.message.startsWith('No item found') || err.message.startsWith('Got invalid')) throw err;
         logger.error(`Failed to fetch item by key ${parameters.itemKey}: ${err.message}`);
         throw new Error(`Failed to fetch item by key "${parameters.itemKey}": ${err.message}`);
       }
