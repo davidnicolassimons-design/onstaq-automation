@@ -12,8 +12,8 @@ import { logger } from '../utils/logger';
  * Supports:
  *   {{trigger.item.id}}
  *   {{trigger.item.key}}
- *   {{trigger.item.attributes.FieldName}}
- *   {{trigger.previous.FieldName}}
+ *   {{trigger.item.attributes.AttributeName}}
+ *   {{trigger.previous.AttributeName}}
  *   {{trigger.user.name}}
  *   {{trigger.timestamp}}
  *   {{trigger.manualParameters.paramName}}
@@ -97,11 +97,17 @@ export class TemplateResolver {
       case 'trigger':
         return this.resolveTriggerPath(path.slice(1), ctx);
 
+      case 'currentItem':
+        return this.resolveCurrentItemPath(path.slice(1), ctx);
+
       case 'env':
         return this.resolveEnv(path[1]);
 
       case 'context':
         return this.resolveContextPath(path.slice(1), ctx);
+
+      case 'variables':
+        return this.navigatePath(ctx.variables, path.slice(1));
 
       case 'action':
         return this.resolveActionResult(path, ctx);
@@ -158,14 +164,22 @@ export class TemplateResolver {
     return this.navigatePath(ctx, path);
   }
 
+  private resolveCurrentItemPath(path: string[], ctx: ExecutionContext): any {
+    // Falls back to trigger item when not in a branch
+    const item = ctx.currentItem || ctx.trigger.item;
+    if (!item) return undefined;
+    if (!path.length) return item;
+    return this.navigatePath(item, path);
+  }
+
   private resolveActionResult(path: string[], ctx: ExecutionContext): any {
     // action[0].result.field
     const match = path[0].match(/^action\[(\d+)\]$/);
     if (match) {
       const index = parseInt(match[1], 10);
-      const actionResult = ctx.actionResults[index];
-      if (!actionResult) return undefined;
-      return this.navigatePath(actionResult, path.slice(1));
+      const componentResult = ctx.componentResults[index];
+      if (!componentResult) return undefined;
+      return this.navigatePath(componentResult, path.slice(1));
     }
     return undefined;
   }

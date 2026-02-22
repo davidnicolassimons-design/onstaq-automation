@@ -1,6 +1,6 @@
 // =============================================================================
 // Automation Executor
-// Orchestrates: Trigger → Condition → Action pipeline
+// Orchestrates: Trigger → Component chain (actions, conditions, branches, if/else)
 // =============================================================================
 
 import { PrismaClient } from '@prisma/client';
@@ -11,7 +11,8 @@ import { TemplateResolver } from './template-resolver';
 import { TriggerManager } from './trigger-manager';
 import {
   AutomationRule, TriggerEvent, ExecutionContext,
-  ConditionConfig, ActionConfig
+  RuleComponent, ComponentResult, ConditionConfig,
+  ActionConfig, BranchConfig, IfElseConfig, Item
 } from './types';
 import { logger } from '../utils/logger';
 
@@ -125,7 +126,7 @@ export class AutomationExecutor {
    */
   async testAutomation(automationId: string, mockTriggerData?: Partial<TriggerEvent>): Promise<{
     conditionResult: { passed: boolean; details: Record<string, any> };
-    wouldExecuteActions: string[];
+    wouldExecuteComponents: string[];
   }> {
     const automation = await this.getAutomationRule(automationId);
     if (!automation) throw new Error(`Automation not found: ${automationId}`);
@@ -137,26 +138,42 @@ export class AutomationExecutor {
       ...mockTriggerData,
     };
 
-    const ctx: ExecutionContext = {
-      automationId: automation.id,
-      automationName: automation.name,
-      workspaceId: automation.workspaceId,
-      trigger: event,
-      actionResults: [],
-      variables: {},
-      startedAt: new Date(),
+    // Summarize what would execute
+    const describeComponents = (comps: RuleComponent[], prefix = ''): string[] => {
+      const lines: string[] = [];
+      for (const comp of comps) {
+        switch (comp.componentType) {
+          case 'action':
+            lines.push(`${prefix}[action] ${comp.action?.type}${comp.action?.name ? ` (${comp.action.name})` : ''}`);
+            break;
+          case 'condition':
+            lines.push(`${prefix}[condition] ${(comp.condition as any)?.type || 'group'}`);
+            break;
+          case 'branch':
+            lines.push(`${prefix}[branch] ${comp.branch?.type}`);
+            if (comp.branch?.components) {
+              lines.push(...describeComponents(comp.branch.components, prefix + '  '));
+            }
+            break;
+          case 'if_else':
+            lines.push(`${prefix}[if/else]`);
+            if (comp.ifElse?.then) {
+              lines.push(`${prefix}  [then]`);
+              lines.push(...describeComponents(comp.ifElse.then, prefix + '    '));
+            }
+            if (comp.ifElse?.else) {
+              lines.push(`${prefix}  [else]`);
+              lines.push(...describeComponents(comp.ifElse.else, prefix + '    '));
+            }
+            break;
+        }
+      }
+      return lines;
     };
 
-    const conditionResult = await this.conditionEvaluator.evaluate(
-      automation.conditions as ConditionConfig | null,
-      ctx
-    );
-
     return {
-      conditionResult,
-      wouldExecuteActions: conditionResult.passed
-        ? (automation.actions as ActionConfig[]).map((a, i) => `[${i}] ${a.type}${a.name ? ` (${a.name})` : ''}`)
-        : [],
+      conditionResult: { passed: true, details: { reason: 'Dry run — conditions not evaluated in new model' } },
+      wouldExecuteComponents: describeComponents(automation.components as RuleComponent[]),
     };
   }
 
@@ -188,7 +205,7 @@ export class AutomationExecutor {
   }
 
   /**
-   * Full execution pipeline: create execution record → evaluate conditions → run actions.
+   * Full execution pipeline: create execution record → execute component chain.
    */
   private async executeAutomation(automation: AutomationRule, event: TriggerEvent): Promise<string> {
     if (this.activeExecutions >= this.config.maxConcurrentExecutions) {
@@ -228,52 +245,28 @@ export class AutomationExecutor {
       automationName: automation.name,
       workspaceId: automation.workspaceId,
       trigger: event,
-      actionResults: [],
+      componentResults: [],
       variables: {},
+      createdItems: [],
+      currentItem: event.item,
       startedAt: startTime,
     };
 
     try {
-      // 1. Evaluate conditions
-      const conditionResult = await this.conditionEvaluator.evaluate(
-        automation.conditions as ConditionConfig | null,
-        ctx
-      );
-      ctx.conditionResult = conditionResult;
+      // Execute the component chain
+      const components = automation.components as RuleComponent[];
+      const componentResults = await this.executeComponents(components, ctx);
 
-      if (!conditionResult.passed) {
-        // Conditions not met — skip
-        await this.prisma.execution.update({
-          where: { id: execution.id },
-          data: {
-            status: 'SKIPPED',
-            conditionResult: conditionResult as any,
-            completedAt: new Date(),
-            durationMs: Date.now() - startTime.getTime(),
-          },
-        });
-
-        logger.info(`Automation ${automation.name} skipped: conditions not met`);
-        this.activeExecutions--;
-        this.drainQueue();
-        return execution.id;
-      }
-
-      // 2. Execute actions
-      const actions = automation.actions as ActionConfig[];
-      const actionResults = await this.actionRunner.executeAll(actions, ctx);
-
-      const hasFailure = actionResults.some((r) => r.status === 'failed');
+      const hasFailure = this.hasFailure(componentResults);
       const finalStatus = hasFailure ? 'FAILED' : 'SUCCESS';
 
-      // 3. Update execution record
+      // Update execution record
       await this.prisma.execution.update({
         where: { id: execution.id },
         data: {
           status: finalStatus,
-          conditionResult: conditionResult as any,
-          actionResults: actionResults as any,
-          error: hasFailure ? actionResults.find((r) => r.status === 'failed')?.error : null,
+          componentResults: componentResults as any,
+          error: hasFailure ? this.findFirstError(componentResults) : null,
           completedAt: new Date(),
           durationMs: Date.now() - startTime.getTime(),
         },
@@ -289,8 +282,7 @@ export class AutomationExecutor {
         where: { id: execution.id },
         data: {
           status: 'FAILED',
-          conditionResult: ctx.conditionResult as any,
-          actionResults: ctx.actionResults as any,
+          componentResults: ctx.componentResults as any,
           error: err.message,
           completedAt: new Date(),
           durationMs: Date.now() - startTime.getTime(),
@@ -304,6 +296,248 @@ export class AutomationExecutor {
   }
 
   // ===========================================================================
+  // Component Chain Execution (recursive)
+  // ===========================================================================
+
+  private async executeComponents(components: RuleComponent[], ctx: ExecutionContext): Promise<ComponentResult[]> {
+    const results: ComponentResult[] = [];
+
+    for (const comp of components) {
+      const start = Date.now();
+      let result: ComponentResult;
+
+      try {
+        switch (comp.componentType) {
+          case 'action':
+            result = await this.executeActionComponent(comp, ctx);
+            break;
+          case 'condition':
+            result = await this.executeConditionComponent(comp, ctx);
+            break;
+          case 'branch':
+            result = await this.executeBranchComponent(comp, ctx);
+            break;
+          case 'if_else':
+            result = await this.executeIfElseComponent(comp, ctx);
+            break;
+          default:
+            result = {
+              componentId: comp.id,
+              componentType: comp.componentType,
+              status: 'failed',
+              error: `Unknown component type: ${comp.componentType}`,
+              durationMs: Date.now() - start,
+            };
+        }
+      } catch (err: any) {
+        result = {
+          componentId: comp.id,
+          componentType: comp.componentType,
+          status: 'failed',
+          error: err.message,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      results.push(result);
+      ctx.componentResults.push(result);
+
+      // If a condition fails, stop remaining components
+      if (comp.componentType === 'condition' && result.status === 'skipped') {
+        logger.info(`Condition ${comp.id} not met — stopping component chain`);
+        break;
+      }
+
+      // If an action fails and continueOnError is not set, stop
+      if (comp.componentType === 'action' && result.status === 'failed') {
+        const continueOnError = comp.action?.continueOnError ?? false;
+        if (!continueOnError) {
+          logger.warn(`Action ${comp.id} failed — stopping component chain`);
+          break;
+        }
+      }
+    }
+
+    return results;
+  }
+
+  private async executeActionComponent(comp: RuleComponent, ctx: ExecutionContext): Promise<ComponentResult> {
+    const action = comp.action as ActionConfig;
+    const start = Date.now();
+
+    const actionResult = await this.actionRunner.executeOne(action, ctx);
+
+    return {
+      componentId: comp.id,
+      componentType: 'action',
+      actionType: action.type,
+      status: actionResult.status,
+      result: actionResult.result,
+      error: actionResult.error,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  private async executeConditionComponent(comp: RuleComponent, ctx: ExecutionContext): Promise<ComponentResult> {
+    const condition = comp.condition as ConditionConfig;
+    const start = Date.now();
+
+    const condResult = await this.conditionEvaluator.evaluate(condition, ctx);
+
+    return {
+      componentId: comp.id,
+      componentType: 'condition',
+      status: condResult.passed ? 'success' : 'skipped',
+      result: condResult.details,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  private async executeBranchComponent(comp: RuleComponent, ctx: ExecutionContext): Promise<ComponentResult> {
+    const branch = comp.branch as BranchConfig;
+    const start = Date.now();
+    const childResults: ComponentResult[] = [];
+
+    // Resolve target items based on branch type
+    let items: Item[] = [];
+
+    switch (branch.type) {
+      case 'related_items': {
+        const sourceItem = ctx.currentItem || ctx.trigger.item;
+        if (!sourceItem) {
+          return {
+            componentId: comp.id,
+            componentType: 'branch',
+            status: 'skipped',
+            error: 'No source item for related_items branch',
+            durationMs: Date.now() - start,
+          };
+        }
+
+        const refs = await this.onstaqClient.getReferences(sourceItem.id);
+        const relevantRefs = branch.direction === 'inbound' ? refs.inbound : refs.outbound;
+
+        let filtered = relevantRefs;
+        if (branch.referenceKind) {
+          filtered = filtered.filter((r) => r.referenceKind === branch.referenceKind);
+        }
+
+        // Fetch full items for each reference
+        for (const ref of filtered) {
+          try {
+            const targetId = branch.direction === 'inbound' ? ref.fromItemId : ref.toItemId;
+            const item = await this.onstaqClient.getItem(targetId);
+
+            // Filter by catalog if specified
+            if (branch.catalogId && item.catalogId !== branch.catalogId) continue;
+
+            items.push(item);
+          } catch (err: any) {
+            logger.warn(`Could not fetch referenced item: ${err.message}`);
+          }
+        }
+        break;
+      }
+
+      case 'created_items': {
+        items = [...ctx.createdItems];
+        break;
+      }
+
+      case 'lookup_items': {
+        if (!branch.oqlQuery) {
+          return {
+            componentId: comp.id,
+            componentType: 'branch',
+            status: 'failed',
+            error: 'lookup_items branch requires oqlQuery',
+            durationMs: Date.now() - start,
+          };
+        }
+
+        const resolvedQuery = await this.templateResolver.resolveString(branch.oqlQuery, ctx);
+        const oqlResult = await this.onstaqClient.executeOql(resolvedQuery, ctx.workspaceId);
+
+        // Each row should have an id field to fetch the full item
+        for (const row of oqlResult.rows || []) {
+          const itemId = row.id || row.itemId;
+          if (itemId) {
+            try {
+              items.push(await this.onstaqClient.getItem(itemId));
+            } catch (err: any) {
+              logger.warn(`Could not fetch lookup item ${itemId}: ${err.message}`);
+            }
+          }
+        }
+        break;
+      }
+    }
+
+    logger.info(`Branch ${branch.type}: found ${items.length} items to iterate`);
+
+    // Execute sub-components for each item
+    for (const item of items) {
+      const branchCtx: ExecutionContext = {
+        ...ctx,
+        currentItem: item,
+        componentResults: [], // Separate results for branch iteration
+      };
+
+      const iterResults = await this.executeComponents(branch.components as RuleComponent[], branchCtx);
+      childResults.push(...iterResults);
+
+      // Merge created items back to parent context
+      ctx.createdItems.push(...branchCtx.createdItems.filter(
+        (ci) => !ctx.createdItems.some((existing) => existing.id === ci.id)
+      ));
+    }
+
+    const hasBranchFailure = this.hasFailure(childResults);
+
+    return {
+      componentId: comp.id,
+      componentType: 'branch',
+      status: hasBranchFailure ? 'failed' : 'success',
+      result: { itemCount: items.length, branchType: branch.type },
+      children: childResults,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  private async executeIfElseComponent(comp: RuleComponent, ctx: ExecutionContext): Promise<ComponentResult> {
+    const ifElse = comp.ifElse as IfElseConfig;
+    const start = Date.now();
+
+    // Evaluate condition
+    const condResult = await this.conditionEvaluator.evaluate(ifElse.conditions as ConditionConfig, ctx);
+
+    let childResults: ComponentResult[];
+    let branch: string;
+
+    if (condResult.passed) {
+      branch = 'then';
+      childResults = await this.executeComponents(ifElse.then as RuleComponent[], ctx);
+    } else if (ifElse.else && ifElse.else.length > 0) {
+      branch = 'else';
+      childResults = await this.executeComponents(ifElse.else as RuleComponent[], ctx);
+    } else {
+      branch = 'skipped';
+      childResults = [];
+    }
+
+    const hasChildFailure = this.hasFailure(childResults);
+
+    return {
+      componentId: comp.id,
+      componentType: 'if_else',
+      status: hasChildFailure ? 'failed' : 'success',
+      result: { conditionPassed: condResult.passed, branch, conditionDetails: condResult.details },
+      children: childResults,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  // ===========================================================================
   // Chain triggering (for automation.trigger action)
   // ===========================================================================
 
@@ -314,6 +548,25 @@ export class AutomationExecutor {
   // ===========================================================================
   // Helpers
   // ===========================================================================
+
+  private hasFailure(results: ComponentResult[]): boolean {
+    return results.some((r) => {
+      if (r.status === 'failed') return true;
+      if (r.children) return this.hasFailure(r.children);
+      return false;
+    });
+  }
+
+  private findFirstError(results: ComponentResult[]): string | null {
+    for (const r of results) {
+      if (r.status === 'failed' && r.error) return r.error;
+      if (r.children) {
+        const childError = this.findFirstError(r.children);
+        if (childError) return childError;
+      }
+    }
+    return null;
+  }
 
   private async loadAutomations(): Promise<AutomationRule[]> {
     const records = await this.prisma.automation.findMany({
@@ -338,8 +591,7 @@ export class AutomationExecutor {
       workspaceKey: record.workspaceKey,
       enabled: record.enabled,
       trigger: record.trigger as any,
-      conditions: record.conditions as any,
-      actions: record.actions as any,
+      components: record.components as any,
       executionOrder: record.executionOrder,
       createdBy: record.createdBy,
       createdAt: record.createdAt.toISOString(),

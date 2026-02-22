@@ -104,8 +104,8 @@ export class ConditionEvaluator {
     const item = ctx.trigger.item;
     if (!item) return false;
 
-    const currentValue = item.attributeValues?.[condition.field];
-    const previousValue = ctx.trigger.previousValues?.[condition.field];
+    const currentValue = item.attributeValues?.[condition.attribute];
+    const previousValue = ctx.trigger.previousValues?.[condition.attribute];
 
     return this.compareValue(condition.operator, currentValue, condition.value, previousValue, condition.from, condition.to);
   }

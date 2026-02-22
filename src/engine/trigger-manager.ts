@@ -10,6 +10,8 @@ import {
   TriggerConfig, TriggerEvent, TriggerType,
   ItemCreatedTrigger, ItemUpdatedTrigger,
   AttributeChangedTrigger, StatusChangedTrigger,
+  ItemLinkedTrigger, ItemUnlinkedTrigger,
+  ItemCommentedTrigger,
   ScheduleTrigger, OqlMatchTrigger, AutomationRule
 } from './types';
 import { logger } from '../utils/logger';
@@ -205,10 +207,18 @@ export class TriggerManager {
       case 'status.changed':
         await this.pollStatusChanged(automation, trigger as StatusChangedTrigger, lastCheckedAt, lastSeenData);
         break;
+      case 'item.linked':
+        await this.pollItemLinked(automation, trigger as ItemLinkedTrigger, lastCheckedAt, lastSeenData);
+        break;
+      case 'item.unlinked':
+        await this.pollItemUnlinked(automation, trigger as ItemUnlinkedTrigger, lastCheckedAt, lastSeenData);
+        break;
+      case 'item.commented':
+        await this.pollItemCommented(automation, trigger as ItemCommentedTrigger, lastCheckedAt, lastSeenData);
+        break;
       case 'oql.match':
         await this.pollOqlMatch(automation, trigger as OqlMatchTrigger, lastSeenData);
         break;
-      // item.deleted and reference.added handled similarly
     }
 
     // Update trigger state
@@ -411,6 +421,158 @@ export class TriggerManager {
       });
     } catch (err: any) {
       logger.error(`OQL poll failed for automation ${automation.id}: ${err.message}`);
+    }
+  }
+
+  private async pollItemLinked(
+    automation: AutomationRule,
+    trigger: ItemLinkedTrigger,
+    lastChecked: Date,
+    lastSeen: Record<string, any>
+  ): Promise<void> {
+    const catalogId = trigger.catalogId || await this.resolveCatalogId(trigger.catalogName, automation.workspaceId);
+    if (!catalogId) return;
+
+    // Poll recently updated items and check history for reference additions
+    const result = await this.onstaqClient.listItems({
+      catalogId,
+      sortBy: 'updatedAt',
+      sortOrder: 'desc',
+      limit: 20,
+    });
+
+    for (const item of result.data) {
+      const updatedAt = new Date(item.updatedAt);
+      if (updatedAt <= lastChecked) continue;
+
+      const history = await this.onstaqClient.getHistory(item.id);
+      const refAdds = history.filter(
+        (h) => new Date(h.createdAt) > lastChecked && h.action === 'REFERENCE_ADDED'
+      );
+
+      for (const entry of refAdds) {
+        // Filter by reference kind if specified
+        if (trigger.referenceKind && entry.changes) {
+          const kind = (entry.changes as any).referenceKind;
+          if (kind && kind !== trigger.referenceKind) continue;
+        }
+
+        const hash = this.hashEvent(`item.linked:${item.id}:${entry.id || entry.createdAt}`);
+        if (lastSeen[hash]) continue;
+
+        const event: TriggerEvent = {
+          type: 'item.linked',
+          automationId: automation.id,
+          timestamp: new Date().toISOString(),
+          item,
+        };
+
+        await this.handler(event);
+        lastSeen[hash] = true;
+
+        await this.prisma.triggerState.update({
+          where: { automationId: automation.id },
+          data: { lastSeenData: lastSeen },
+        });
+      }
+    }
+  }
+
+  private async pollItemUnlinked(
+    automation: AutomationRule,
+    trigger: ItemUnlinkedTrigger,
+    lastChecked: Date,
+    lastSeen: Record<string, any>
+  ): Promise<void> {
+    const catalogId = trigger.catalogId || await this.resolveCatalogId(trigger.catalogName, automation.workspaceId);
+    if (!catalogId) return;
+
+    const result = await this.onstaqClient.listItems({
+      catalogId,
+      sortBy: 'updatedAt',
+      sortOrder: 'desc',
+      limit: 20,
+    });
+
+    for (const item of result.data) {
+      const updatedAt = new Date(item.updatedAt);
+      if (updatedAt <= lastChecked) continue;
+
+      const history = await this.onstaqClient.getHistory(item.id);
+      const refRemoves = history.filter(
+        (h) => new Date(h.createdAt) > lastChecked && h.action === 'REFERENCE_REMOVED'
+      );
+
+      for (const entry of refRemoves) {
+        if (trigger.referenceKind && entry.changes) {
+          const kind = (entry.changes as any).referenceKind;
+          if (kind && kind !== trigger.referenceKind) continue;
+        }
+
+        const hash = this.hashEvent(`item.unlinked:${item.id}:${entry.id || entry.createdAt}`);
+        if (lastSeen[hash]) continue;
+
+        const event: TriggerEvent = {
+          type: 'item.unlinked',
+          automationId: automation.id,
+          timestamp: new Date().toISOString(),
+          item,
+        };
+
+        await this.handler(event);
+        lastSeen[hash] = true;
+
+        await this.prisma.triggerState.update({
+          where: { automationId: automation.id },
+          data: { lastSeenData: lastSeen },
+        });
+      }
+    }
+  }
+
+  private async pollItemCommented(
+    automation: AutomationRule,
+    trigger: ItemCommentedTrigger,
+    lastChecked: Date,
+    lastSeen: Record<string, any>
+  ): Promise<void> {
+    const catalogId = trigger.catalogId || await this.resolveCatalogId(trigger.catalogName, automation.workspaceId);
+    if (!catalogId) return;
+
+    // Poll recently updated items and check for new comments
+    const result = await this.onstaqClient.listItems({
+      catalogId,
+      sortBy: 'updatedAt',
+      sortOrder: 'desc',
+      limit: 20,
+    });
+
+    for (const item of result.data) {
+      const updatedAt = new Date(item.updatedAt);
+      if (updatedAt <= lastChecked) continue;
+
+      const comments = await this.onstaqClient.getComments(item.id);
+      const newComments = comments.filter((c) => new Date(c.createdAt) > lastChecked);
+
+      for (const comment of newComments) {
+        const hash = this.hashEvent(`item.commented:${item.id}:${comment.id}`);
+        if (lastSeen[hash]) continue;
+
+        const event: TriggerEvent = {
+          type: 'item.commented',
+          automationId: automation.id,
+          timestamp: new Date().toISOString(),
+          item,
+        };
+
+        await this.handler(event);
+        lastSeen[hash] = true;
+
+        await this.prisma.triggerState.update({
+          where: { automationId: automation.id },
+          data: { lastSeenData: lastSeen },
+        });
+      }
     }
   }
 

@@ -118,8 +118,8 @@ export function createApiServer(
       ],
       logicalOperators: ['AND', 'OR', 'NOT'],
       templateVariables: [
-        '{{trigger.item.id}}', '{{trigger.item.key}}', '{{trigger.item.attributes.FieldName}}',
-        '{{trigger.previous.FieldName}}', '{{trigger.user.name}}', '{{trigger.timestamp}}',
+        '{{trigger.item.id}}', '{{trigger.item.key}}', '{{trigger.item.attributes.AttributeName}}',
+        '{{trigger.previous.AttributeName}}', '{{trigger.user.name}}', '{{trigger.timestamp}}',
         '{{env.NOW}}', '{{env.TODAY}}', '{{context.variables.name}}',
         '{{oql:FROM Catalog WHERE ... SELECT COUNT(*)}}',
       ],

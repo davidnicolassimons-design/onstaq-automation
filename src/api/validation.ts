@@ -11,6 +11,8 @@ const itemTriggerBase = z.object({
   catalogName: z.string().optional(),
 });
 
+const referenceKindEnum = z.enum(['DEPENDENCY', 'INSTALLED', 'LINK', 'OWNERSHIP', 'LOCATED_IN', 'CUSTOM']);
+
 const triggerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('item.created'), ...itemTriggerBase.shape }),
   z.object({
@@ -35,7 +37,21 @@ const triggerSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('reference.added'),
     ...itemTriggerBase.shape,
-    referenceKind: z.enum(['DEPENDENCY', 'INSTALLED', 'LINK', 'OWNERSHIP', 'LOCATED_IN', 'CUSTOM']).optional(),
+    referenceKind: referenceKindEnum.optional(),
+  }),
+  z.object({
+    type: z.literal('item.linked'),
+    ...itemTriggerBase.shape,
+    referenceKind: referenceKindEnum.optional(),
+  }),
+  z.object({
+    type: z.literal('item.unlinked'),
+    ...itemTriggerBase.shape,
+    referenceKind: referenceKindEnum.optional(),
+  }),
+  z.object({
+    type: z.literal('item.commented'),
+    ...itemTriggerBase.shape,
   }),
   z.object({
     type: z.literal('schedule'),
@@ -73,7 +89,7 @@ const singleConditionSchema: z.ZodType<any> = z.lazy(() =>
   z.union([
     z.object({
       type: z.literal('attribute'),
-      field: z.string(),
+      attribute: z.string(),
       operator: z.enum([
         'equals', 'not_equals', 'contains', 'not_contains',
         'starts_with', 'ends_with', 'greater_than', 'less_than',
@@ -111,23 +127,50 @@ const conditionGroupSchema: z.ZodType<any> = z.lazy(() =>
   })
 );
 
-const conditionSchema = z.union([singleConditionSchema, conditionGroupSchema]).nullable().optional();
+const conditionSchema = z.union([singleConditionSchema, conditionGroupSchema]);
 
-// --- Action Schemas ---
+// --- Action Schema ---
 
 const actionSchema = z.object({
   type: z.enum([
     'item.create', 'item.update', 'item.delete',
+    'item.clone', 'item.transition', 'item.lookup',
     'attribute.set', 'reference.add', 'reference.remove',
     'comment.add', 'item.import',
     'catalog.create', 'attribute.create',
     'workspace.member.add', 'oql.execute',
     'webhook.send', 'automation.trigger',
+    'variable.set', 'log', 'refetch_data',
   ]),
   name: z.string().optional(),
   continueOnError: z.boolean().optional(),
   config: z.record(z.any()),
 });
+
+// --- Component Schema (recursive) ---
+
+const componentSchema: z.ZodType<any> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    componentType: z.enum(['action', 'condition', 'branch', 'if_else']),
+    action: actionSchema.optional(),
+    condition: conditionSchema.optional(),
+    branch: z.object({
+      type: z.enum(['related_items', 'created_items', 'lookup_items']),
+      direction: z.enum(['outbound', 'inbound']).optional(),
+      referenceKind: referenceKindEnum.optional(),
+      catalogId: z.string().uuid().optional(),
+      catalogName: z.string().optional(),
+      oqlQuery: z.string().optional(),
+      components: z.array(componentSchema).default([]),
+    }).optional(),
+    ifElse: z.object({
+      conditions: conditionSchema,
+      then: z.array(componentSchema).min(1),
+      else: z.array(componentSchema).optional(),
+    }).optional(),
+  })
+);
 
 // --- Automation CRUD Schemas ---
 
@@ -138,8 +181,7 @@ export const createAutomationSchema = z.object({
   workspaceKey: z.string().optional(),
   enabled: z.boolean().optional().default(true),
   trigger: triggerSchema,
-  conditions: conditionSchema,
-  actions: z.array(actionSchema).min(1),
+  components: z.array(componentSchema).min(1),
   executionOrder: z.number().int().optional().default(0),
 });
 
@@ -148,8 +190,7 @@ export const updateAutomationSchema = z.object({
   description: z.string().optional(),
   enabled: z.boolean().optional(),
   trigger: triggerSchema.optional(),
-  conditions: conditionSchema,
-  actions: z.array(actionSchema).min(1).optional(),
+  components: z.array(componentSchema).min(1).optional(),
   executionOrder: z.number().int().optional(),
 });
 

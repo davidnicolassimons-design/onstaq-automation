@@ -86,8 +86,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
           workspaceKey: data.workspaceKey,
           enabled: data.enabled,
           trigger: data.trigger as any,
-          conditions: data.conditions as any,
-          actions: data.actions as any,
+          components: data.components as any,
           executionOrder: data.executionOrder,
           createdBy: req.user?.id || req.body.createdBy || 'system',
         },
@@ -127,8 +126,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
       if (data.description !== undefined) updateData.description = data.description;
       if (data.enabled !== undefined) updateData.enabled = data.enabled;
       if (data.trigger !== undefined) updateData.trigger = data.trigger;
-      if (data.conditions !== undefined) updateData.conditions = data.conditions;
-      if (data.actions !== undefined) updateData.actions = data.actions;
+      if (data.components !== undefined) updateData.components = data.components;
       if (data.executionOrder !== undefined) updateData.executionOrder = data.executionOrder;
 
       const automation = await prisma.automation.update({

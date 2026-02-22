@@ -1,9 +1,10 @@
 // =============================================================================
 // Automation Engine Type Definitions
-// Triggers, Conditions, Actions — the core DSL
+// Component-chain architecture: Trigger → Components[] (actions, conditions, branches, if/else)
 // =============================================================================
 
 import { Item, ReferenceKind } from '../onstaq/types';
+export type { Item } from '../onstaq/types';
 
 // --- Trigger Types ---
 
@@ -14,6 +15,9 @@ export type TriggerType =
   | 'attribute.changed'
   | 'status.changed'
   | 'reference.added'
+  | 'item.linked'
+  | 'item.unlinked'
+  | 'item.commented'
   | 'schedule'
   | 'manual'
   | 'oql.match'
@@ -25,15 +29,15 @@ export interface BaseTriggerConfig {
 
 export interface ItemCreatedTrigger extends BaseTriggerConfig {
   type: 'item.created';
-  catalogId?: string;       // Filter by catalog (optional)
-  catalogName?: string;     // Alternative: match by name
+  catalogId?: string;
+  catalogName?: string;
 }
 
 export interface ItemUpdatedTrigger extends BaseTriggerConfig {
   type: 'item.updated';
   catalogId?: string;
   catalogName?: string;
-  attributes?: string[];    // Only trigger for specific attribute changes
+  attributes?: string[];
 }
 
 export interface ItemDeletedTrigger extends BaseTriggerConfig {
@@ -46,9 +50,9 @@ export interface AttributeChangedTrigger extends BaseTriggerConfig {
   type: 'attribute.changed';
   catalogId?: string;
   catalogName?: string;
-  attributeName: string;    // Watch a specific attribute
-  from?: string;            // Optional: only trigger on specific old value
-  to?: string;              // Optional: only trigger on specific new value
+  attributeName: string;
+  from?: string;
+  to?: string;
 }
 
 export interface StatusChangedTrigger extends BaseTriggerConfig {
@@ -66,17 +70,37 @@ export interface ReferenceAddedTrigger extends BaseTriggerConfig {
   referenceKind?: ReferenceKind;
 }
 
+export interface ItemLinkedTrigger extends BaseTriggerConfig {
+  type: 'item.linked';
+  catalogId?: string;
+  catalogName?: string;
+  referenceKind?: ReferenceKind;
+}
+
+export interface ItemUnlinkedTrigger extends BaseTriggerConfig {
+  type: 'item.unlinked';
+  catalogId?: string;
+  catalogName?: string;
+  referenceKind?: ReferenceKind;
+}
+
+export interface ItemCommentedTrigger extends BaseTriggerConfig {
+  type: 'item.commented';
+  catalogId?: string;
+  catalogName?: string;
+}
+
 export interface ScheduleTrigger extends BaseTriggerConfig {
   type: 'schedule';
-  cron: string;             // Cron expression (e.g., "0 9 * * MON-FRI")
-  timezone?: string;        // IANA timezone (default: UTC)
+  cron: string;
+  timezone?: string;
 }
 
 export interface ManualTrigger extends BaseTriggerConfig {
   type: 'manual';
-  catalogId?: string;       // Scopes this manual trigger to a specific catalog
+  catalogId?: string;
   catalogName?: string;
-  parameters?: {            // Optional parameters that can be passed when manually triggering
+  parameters?: {
     name: string;
     type: 'string' | 'number' | 'boolean';
     required?: boolean;
@@ -86,16 +110,16 @@ export interface ManualTrigger extends BaseTriggerConfig {
 
 export interface OqlMatchTrigger extends BaseTriggerConfig {
   type: 'oql.match';
-  query: string;            // OQL query to execute
-  interval?: number;        // Check interval in seconds (default: 60)
+  query: string;
+  interval?: number;
   triggerOn: 'new_results' | 'count_change' | 'any_results';
 }
 
 export interface WebhookReceivedTrigger extends BaseTriggerConfig {
   type: 'webhook.received';
-  path?: string;            // Custom webhook path suffix
-  secret?: string;          // HMAC validation secret
-  filter?: Record<string, any>;  // Filter on webhook body fields
+  path?: string;
+  secret?: string;
+  filter?: Record<string, any>;
 }
 
 export type TriggerConfig =
@@ -105,6 +129,9 @@ export type TriggerConfig =
   | AttributeChangedTrigger
   | StatusChangedTrigger
   | ReferenceAddedTrigger
+  | ItemLinkedTrigger
+  | ItemUnlinkedTrigger
+  | ItemCommentedTrigger
   | ScheduleTrigger
   | ManualTrigger
   | OqlMatchTrigger
@@ -139,30 +166,30 @@ export type ConditionOperator =
 
 export interface AttributeCondition {
   type: 'attribute';
-  field: string;            // Attribute name
+  attribute: string;
   operator: ConditionOperator;
   value?: any;
-  from?: any;               // For changed_from/changed_to
+  from?: any;
   to?: any;
 }
 
 export interface OqlCondition {
   type: 'oql';
-  query: string;            // OQL query — condition passes if results > 0
-  expectCount?: number;     // Optional: pass only if result count matches
+  query: string;
+  expectCount?: number;
 }
 
 export interface ReferenceCondition {
   type: 'reference';
   direction: 'outbound' | 'inbound';
-  catalogName?: string;     // Optional: filter by referenced catalog
+  catalogName?: string;
   referenceKind?: ReferenceKind;
-  exists: boolean;          // true = must have references, false = must not
+  exists: boolean;
 }
 
 export interface TemplateCondition {
   type: 'template';
-  expression: string;       // Template expression that evaluates to truthy/falsy
+  expression: string;
 }
 
 export type SingleCondition =
@@ -184,6 +211,9 @@ export type ActionType =
   | 'item.create'
   | 'item.update'
   | 'item.delete'
+  | 'item.clone'
+  | 'item.transition'
+  | 'item.lookup'
   | 'attribute.set'
   | 'reference.add'
   | 'reference.remove'
@@ -194,29 +224,32 @@ export type ActionType =
   | 'workspace.member.add'
   | 'oql.execute'
   | 'webhook.send'
-  | 'automation.trigger';
+  | 'automation.trigger'
+  | 'variable.set'
+  | 'log'
+  | 'refetch_data';
 
 export interface BaseActionConfig {
   type: ActionType;
-  name?: string;            // Human-readable name for this step
-  continueOnError?: boolean; // Default: false — stop chain on error
+  name?: string;
+  continueOnError?: boolean;
 }
 
 export interface ItemCreateAction extends BaseActionConfig {
   type: 'item.create';
   config: {
     catalogId?: string;
-    catalogName?: string;   // Resolved at runtime to catalogId
-    attributes: Record<string, string>; // Values support {{template}} syntax
+    catalogName?: string;
+    attributes: Record<string, string>;
   };
 }
 
 export interface ItemUpdateAction extends BaseActionConfig {
   type: 'item.update';
   config: {
-    itemId?: string;        // Specific item ID or template
-    itemKey?: string;       // Alternative: match by key
-    useTriggeredItem?: boolean; // Default: true — update the item that triggered
+    itemId?: string;
+    itemKey?: string;
+    useTriggeredItem?: boolean;
     attributes: Record<string, string>;
   };
 }
@@ -230,13 +263,42 @@ export interface ItemDeleteAction extends BaseActionConfig {
   };
 }
 
+export interface ItemCloneAction extends BaseActionConfig {
+  type: 'item.clone';
+  config: {
+    itemId?: string;
+    useTriggeredItem?: boolean;
+    targetCatalogId?: string;
+    targetCatalogName?: string;
+    attributeOverrides?: Record<string, string>;
+  };
+}
+
+export interface ItemTransitionAction extends BaseActionConfig {
+  type: 'item.transition';
+  config: {
+    itemId?: string;
+    useTriggeredItem?: boolean;
+    status: string;
+  };
+}
+
+export interface ItemLookupAction extends BaseActionConfig {
+  type: 'item.lookup';
+  config: {
+    query: string;
+    workspaceId?: string;
+    storeResultAs: string;
+  };
+}
+
 export interface AttributeSetAction extends BaseActionConfig {
   type: 'attribute.set';
   config: {
     itemId?: string;
     useTriggeredItem?: boolean;
     attributeName: string;
-    value: string;          // Supports {{template}}
+    value: string;
   };
 }
 
@@ -244,7 +306,7 @@ export interface ReferenceAddAction extends BaseActionConfig {
   type: 'reference.add';
   config: {
     fromItemId?: string;
-    useTriggeredItem?: boolean; // Use triggered item as "from"
+    useTriggeredItem?: boolean;
     toItemId: string;
     referenceKind?: ReferenceKind;
     label?: string;
@@ -265,7 +327,7 @@ export interface CommentAddAction extends BaseActionConfig {
   config: {
     itemId?: string;
     useTriggeredItem?: boolean;
-    body: string;           // Supports {{template}}
+    body: string;
   };
 }
 
@@ -275,14 +337,14 @@ export interface ItemImportAction extends BaseActionConfig {
     catalogId?: string;
     catalogName?: string;
     keyColumn?: string;
-    rows: Record<string, string>[]; // Each value supports {{template}}
+    rows: Record<string, string>[];
   };
 }
 
 export interface CatalogCreateAction extends BaseActionConfig {
   type: 'catalog.create';
   config: {
-    workspaceId?: string;   // Defaults to automation's workspace
+    workspaceId?: string;
     name: string;
     description?: string;
     icon?: string;
@@ -315,9 +377,9 @@ export interface WorkspaceMemberAddAction extends BaseActionConfig {
 export interface OqlExecuteAction extends BaseActionConfig {
   type: 'oql.execute';
   config: {
-    query: string;          // Supports {{template}}
+    query: string;
     workspaceId?: string;
-    storeResultAs?: string; // Store result in execution context for later actions
+    storeResultAs?: string;
   };
 }
 
@@ -327,7 +389,7 @@ export interface WebhookSendAction extends BaseActionConfig {
     url: string;
     method?: 'GET' | 'POST' | 'PUT' | 'PATCH';
     headers?: Record<string, string>;
-    body?: Record<string, any>; // Deep template resolution
+    body?: Record<string, any>;
   };
 }
 
@@ -339,10 +401,33 @@ export interface AutomationTriggerAction extends BaseActionConfig {
   };
 }
 
+export interface VariableSetAction extends BaseActionConfig {
+  type: 'variable.set';
+  config: {
+    name: string;
+    value: string;
+  };
+}
+
+export interface LogAction extends BaseActionConfig {
+  type: 'log';
+  config: {
+    message: string;
+  };
+}
+
+export interface RefetchDataAction extends BaseActionConfig {
+  type: 'refetch_data';
+  config: Record<string, never>;
+}
+
 export type ActionConfig =
   | ItemCreateAction
   | ItemUpdateAction
   | ItemDeleteAction
+  | ItemCloneAction
+  | ItemTransitionAction
+  | ItemLookupAction
   | AttributeSetAction
   | ReferenceAddAction
   | ReferenceRemoveAction
@@ -353,33 +438,71 @@ export type ActionConfig =
   | WorkspaceMemberAddAction
   | OqlExecuteAction
   | WebhookSendAction
-  | AutomationTriggerAction;
+  | AutomationTriggerAction
+  | VariableSetAction
+  | LogAction
+  | RefetchDataAction;
 
-// --- Execution Context (passed through trigger → condition → action chain) ---
+// --- Component Chain Architecture ---
+
+export type ComponentType = 'action' | 'condition' | 'branch' | 'if_else';
+
+export type BranchType = 'related_items' | 'created_items' | 'lookup_items';
+
+export interface BranchConfig {
+  type: BranchType;
+  // related_items config:
+  direction?: 'outbound' | 'inbound';
+  referenceKind?: ReferenceKind;
+  catalogId?: string;
+  catalogName?: string;
+  // lookup_items config:
+  oqlQuery?: string;
+  // Sub-components to execute for each item in the branch:
+  components: RuleComponent[];
+}
+
+export interface IfElseConfig {
+  conditions: ConditionConfig;
+  then: RuleComponent[];
+  else?: RuleComponent[];
+}
+
+export interface RuleComponent {
+  id: string;
+  componentType: ComponentType;
+  action?: ActionConfig;
+  condition?: ConditionConfig;
+  branch?: BranchConfig;
+  ifElse?: IfElseConfig;
+}
+
+// --- Execution Context ---
+
+export interface ComponentResult {
+  componentId: string;
+  componentType: ComponentType;
+  actionType?: ActionType;
+  status: 'success' | 'failed' | 'skipped';
+  result?: any;
+  error?: string;
+  durationMs: number;
+  children?: ComponentResult[];
+}
 
 export interface ExecutionContext {
   automationId: string;
   automationName: string;
   workspaceId: string;
   trigger: TriggerEvent;
-  conditionResult?: {
-    passed: boolean;
-    details: Record<string, any>;
-  };
-  actionResults: {
-    actionIndex: number;
-    actionType: ActionType;
-    actionName?: string;
-    status: 'success' | 'failed' | 'skipped';
-    result?: any;
-    error?: string;
-    durationMs: number;
-  }[];
-  variables: Record<string, any>;  // Accumulates results from OQL actions, etc.
+  componentResults: ComponentResult[];
+  variables: Record<string, any>;
+  createdItems: Item[];
+  currentItem?: Item;
   startedAt: Date;
 }
 
-// --- Automation Rule (full definition) ---
+// --- Automation Rule ---
 
 export interface AutomationRule {
   id: string;
@@ -389,8 +512,7 @@ export interface AutomationRule {
   workspaceKey?: string;
   enabled: boolean;
   trigger: TriggerConfig;
-  conditions?: ConditionConfig;
-  actions: ActionConfig[];
+  components: RuleComponent[];
   executionOrder: number;
   createdBy: string;
   createdAt: string;

@@ -1,15 +1,17 @@
 // =============================================================================
 // Action Runner
-// Executes action chains against the ONSTAQ API with template resolution
+// Executes individual actions against the ONSTAQ API with template resolution
 // =============================================================================
 
 import {
   ActionConfig, ExecutionContext, ActionType,
   ItemCreateAction, ItemUpdateAction, ItemDeleteAction,
+  ItemCloneAction, ItemTransitionAction, ItemLookupAction,
   AttributeSetAction, ReferenceAddAction, ReferenceRemoveAction,
   CommentAddAction, ItemImportAction, CatalogCreateAction,
   AttributeCreateAction, WorkspaceMemberAddAction,
-  OqlExecuteAction, WebhookSendAction, AutomationTriggerAction
+  OqlExecuteAction, WebhookSendAction, AutomationTriggerAction,
+  VariableSetAction, LogAction, RefetchDataAction
 } from './types';
 import { OnstaqClient } from '../onstaq/client';
 import { TemplateResolver } from './template-resolver';
@@ -17,7 +19,6 @@ import { logger } from '../utils/logger';
 import axios from 'axios';
 
 interface ActionResult {
-  actionIndex: number;
   actionType: ActionType;
   actionName?: string;
   status: 'success' | 'failed' | 'skipped';
@@ -42,51 +43,35 @@ export class ActionRunner {
   }
 
   /**
-   * Execute all actions in sequence. Stops on first error unless continueOnError is set.
+   * Execute a single action and return the result.
    */
-  async executeAll(actions: ActionConfig[], ctx: ExecutionContext): Promise<ActionResult[]> {
-    const results: ActionResult[] = [];
+  async executeOne(action: ActionConfig, ctx: ExecutionContext): Promise<ActionResult> {
+    const start = Date.now();
 
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i];
-      const start = Date.now();
+    try {
+      const result = await this.executeAction(action, ctx);
+      const actionResult: ActionResult = {
+        actionType: action.type,
+        actionName: action.name,
+        status: 'success',
+        result,
+        durationMs: Date.now() - start,
+      };
 
-      try {
-        const result = await this.executeAction(action, ctx);
-        const actionResult: ActionResult = {
-          actionIndex: i,
-          actionType: action.type,
-          actionName: action.name,
-          status: 'success',
-          result,
-          durationMs: Date.now() - start,
-        };
-        results.push(actionResult);
-        ctx.actionResults.push(actionResult);
+      logger.info(`Action ${action.type}${action.name ? ` (${action.name})` : ''} succeeded in ${actionResult.durationMs}ms`);
+      return actionResult;
+    } catch (err: any) {
+      const actionResult: ActionResult = {
+        actionType: action.type,
+        actionName: action.name,
+        status: 'failed',
+        error: err.message || String(err),
+        durationMs: Date.now() - start,
+      };
 
-        logger.info(`Action [${i}] ${action.type} succeeded in ${actionResult.durationMs}ms`);
-      } catch (err: any) {
-        const actionResult: ActionResult = {
-          actionIndex: i,
-          actionType: action.type,
-          actionName: action.name,
-          status: 'failed',
-          error: err.message || String(err),
-          durationMs: Date.now() - start,
-        };
-        results.push(actionResult);
-        ctx.actionResults.push(actionResult);
-
-        logger.error(`Action [${i}] ${action.type} failed: ${err.message}`);
-
-        if (!action.continueOnError) {
-          logger.warn(`Stopping action chain at index ${i} due to error (continueOnError=false)`);
-          break;
-        }
-      }
+      logger.error(`Action ${action.type} failed: ${err.message}`);
+      return actionResult;
     }
-
-    return results;
   }
 
   /**
@@ -100,6 +85,12 @@ export class ActionRunner {
         return this.executeItemUpdate(action as ItemUpdateAction, ctx);
       case 'item.delete':
         return this.executeItemDelete(action as ItemDeleteAction, ctx);
+      case 'item.clone':
+        return this.executeItemClone(action as ItemCloneAction, ctx);
+      case 'item.transition':
+        return this.executeItemTransition(action as ItemTransitionAction, ctx);
+      case 'item.lookup':
+        return this.executeItemLookup(action as ItemLookupAction, ctx);
       case 'attribute.set':
         return this.executeAttributeSet(action as AttributeSetAction, ctx);
       case 'reference.add':
@@ -122,6 +113,12 @@ export class ActionRunner {
         return this.executeWebhookSend(action as WebhookSendAction, ctx);
       case 'automation.trigger':
         return this.executeAutomationTrigger(action as AutomationTriggerAction, ctx);
+      case 'variable.set':
+        return this.executeVariableSet(action as VariableSetAction, ctx);
+      case 'log':
+        return this.executeLog(action as LogAction, ctx);
+      case 'refetch_data':
+        return this.executeRefetchData(action as RefetchDataAction, ctx);
       default:
         throw new Error(`Unknown action type: ${(action as any).type}`);
     }
@@ -142,6 +139,9 @@ export class ActionRunner {
 
     const resolvedAttributes = await this.templateResolver.resolveValue(attributes, ctx);
     const item = await this.onstaqClient.createItem(resolvedCatalogId, resolvedAttributes);
+
+    // Track created items for created_items branch
+    ctx.createdItems.push(item);
 
     logger.info(`Created item ${item.key} in catalog ${resolvedCatalogId}`);
     return { itemId: item.id, itemKey: item.key };
@@ -166,6 +166,55 @@ export class ActionRunner {
 
     logger.info(`Deleted item ${targetId}`);
     return { deletedItemId: targetId };
+  }
+
+  private async executeItemClone(action: ItemCloneAction, ctx: ExecutionContext): Promise<any> {
+    const { itemId, useTriggeredItem = true, targetCatalogId, targetCatalogName, attributeOverrides } = action.config;
+
+    const sourceId = await this.resolveItemId(itemId, undefined, useTriggeredItem, ctx);
+    const sourceItem = await this.onstaqClient.getItem(sourceId);
+
+    // Resolve target catalog
+    let catalogId = targetCatalogId || sourceItem.catalogId;
+    if (!catalogId && targetCatalogName) {
+      catalogId = await this.resolveCatalogId(targetCatalogName, ctx.workspaceId);
+    }
+
+    // Merge source attributes with overrides
+    const attributes = { ...(sourceItem.attributeValues || {}) };
+    if (attributeOverrides) {
+      const resolvedOverrides = await this.templateResolver.resolveValue(attributeOverrides, ctx);
+      Object.assign(attributes, resolvedOverrides);
+    }
+
+    const clonedItem = await this.onstaqClient.createItem(catalogId, attributes);
+    ctx.createdItems.push(clonedItem);
+
+    logger.info(`Cloned item ${sourceItem.key} → ${clonedItem.key}`);
+    return { itemId: clonedItem.id, itemKey: clonedItem.key, sourceItemId: sourceId };
+  }
+
+  private async executeItemTransition(action: ItemTransitionAction, ctx: ExecutionContext): Promise<any> {
+    const { itemId, useTriggeredItem = true, status } = action.config;
+
+    const targetId = await this.resolveItemId(itemId, undefined, useTriggeredItem, ctx);
+    const resolvedStatus = await this.templateResolver.resolveString(status, ctx);
+
+    const item = await this.onstaqClient.updateItem(targetId, { STATUS: resolvedStatus });
+    logger.info(`Transitioned item ${item.key} to status "${resolvedStatus}"`);
+    return { itemId: item.id, itemKey: item.key, status: resolvedStatus };
+  }
+
+  private async executeItemLookup(action: ItemLookupAction, ctx: ExecutionContext): Promise<any> {
+    const { query, workspaceId, storeResultAs } = action.config;
+
+    const resolvedQuery = await this.templateResolver.resolveString(query, ctx);
+    const result = await this.onstaqClient.executeOql(resolvedQuery, workspaceId || ctx.workspaceId);
+
+    ctx.variables[storeResultAs] = result;
+
+    logger.info(`Item lookup: ${result.totalCount} results stored as "${storeResultAs}"`);
+    return { totalCount: result.totalCount, storeResultAs };
   }
 
   private async executeAttributeSet(action: AttributeSetAction, ctx: ExecutionContext): Promise<any> {
@@ -334,6 +383,43 @@ export class ActionRunner {
     return { triggeredAutomationId: automationId };
   }
 
+  private async executeVariableSet(action: VariableSetAction, ctx: ExecutionContext): Promise<any> {
+    const { name, value } = action.config;
+    const resolvedValue = await this.templateResolver.resolveString(value, ctx);
+
+    ctx.variables[name] = resolvedValue;
+    logger.info(`Set variable "${name}" = "${resolvedValue}"`);
+    return { name, value: resolvedValue };
+  }
+
+  private async executeLog(action: LogAction, ctx: ExecutionContext): Promise<any> {
+    const { message } = action.config;
+    const resolvedMessage = await this.templateResolver.resolveString(message, ctx);
+
+    logger.info(`[Automation Log] ${ctx.automationName}: ${resolvedMessage}`);
+    return { message: resolvedMessage };
+  }
+
+  private async executeRefetchData(_action: RefetchDataAction, ctx: ExecutionContext): Promise<any> {
+    const item = ctx.currentItem || ctx.trigger.item;
+    if (!item) {
+      throw new Error('No item in context to refetch');
+    }
+
+    const refreshed = await this.onstaqClient.getItem(item.id);
+
+    // Update the context
+    if (ctx.currentItem) {
+      ctx.currentItem = refreshed;
+    }
+    if (ctx.trigger.item && ctx.trigger.item.id === refreshed.id) {
+      ctx.trigger.item = refreshed;
+    }
+
+    logger.info(`Refetched data for item ${refreshed.key}`);
+    return { itemId: refreshed.id, itemKey: refreshed.key };
+  }
+
   // ---- Helpers ----
 
   private async resolveItemId(
@@ -351,8 +437,10 @@ export class ActionRunner {
       if (items.data.length === 0) throw new Error(`Item not found with key: ${resolvedKey}`);
       return items.data[0].id;
     }
-    if (useTriggeredItem && ctx.trigger.item?.id) {
-      return ctx.trigger.item.id;
+    // Prefer currentItem (branch context) over trigger item
+    if (useTriggeredItem) {
+      if (ctx.currentItem?.id) return ctx.currentItem.id;
+      if (ctx.trigger.item?.id) return ctx.trigger.item.id;
     }
     throw new Error('Cannot resolve item ID: no itemId, itemKey, or triggered item available');
   }

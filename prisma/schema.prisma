@@ -17,8 +17,7 @@ model Automation {
   workspaceKey   String?     // ONSTAQ workspace key (e.g., "CMDB") for display
   enabled        Boolean     @default(true)
   trigger        Json        // TriggerConfig
-  conditions     Json?       // ConditionGroup | null
-  actions        Json        // ActionConfig[]
+  components     Json        // RuleComponent[]
   executionOrder Int         @default(0)
   createdBy      String      // ONSTAQ user ID
   createdAt      DateTime    @default(now())
@@ -31,17 +30,17 @@ model Automation {
 }
 
 model Execution {
-  id              String    @id @default(uuid())
-  automationId    String
-  automation      Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
-  status          String    // PENDING, RUNNING, SUCCESS, FAILED, SKIPPED
-  triggerData     Json      // Snapshot of what triggered execution
-  conditionResult Json?     // Evaluation details
-  actionResults   Json?     // Per-action results array
-  error           String?
-  startedAt       DateTime  @default(now())
-  completedAt     DateTime?
-  durationMs      Int?
+  id               String    @id @default(uuid())
+  automationId     String
+  automation       Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  status           String    // PENDING, RUNNING, SUCCESS, FAILED, SKIPPED
+  triggerData      Json      // Snapshot of what triggered execution
+  conditionResult  Json?     // Legacy: kept for old execution records
+  componentResults Json?     // ComponentResult[] tree
+  error            String?
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+  durationMs       Int?
 
   @@index([automationId])
   @@index([status])

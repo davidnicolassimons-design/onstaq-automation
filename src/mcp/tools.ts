@@ -75,9 +75,13 @@ TRIGGER TYPES: item.created, item.updated, item.deleted, attribute.changed, stat
 CONDITION TYPES: attribute (compare values), oql (run query), reference (check refs exist), template (evaluate expression)
 Conditions support AND/OR/NOT composition.
 
-ACTION TYPES: item.create, item.update, item.delete, attribute.set, reference.add, reference.remove, comment.add, item.import, catalog.create, attribute.create, workspace.member.add, oql.execute, webhook.send, automation.trigger
+ACTION TYPES: item.create, item.update, item.delete, item.clone, item.transition, item.lookup, attribute.set, reference.add, reference.remove, comment.add, item.import, catalog.create, attribute.create, workspace.member.add, oql.execute, webhook.send, automation.trigger, variable.set, log, refetch_data
 
-Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}}, {{trigger.item.attributes.FieldName}}, {{trigger.previous.FieldName}}, {{env.NOW}}, {{oql:QUERY}}`,
+COMPONENT CHAIN: Rules use a flat ordered list of components (actions, conditions, branches, if/else blocks) instead of separate conditions and actions.
+BRANCH TYPES: related_items, created_items, lookup_items — iterate sub-components for each matched item.
+IF/ELSE: Evaluate conditions, then execute then[] or else[] component paths.
+
+Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}}, {{trigger.item.attributes.AttributeName}}, {{trigger.previous.AttributeName}}, {{currentItem.id}}, {{variables.name}}, {{env.NOW}}, {{oql:QUERY}}`,
       inputSchema: z.object({
         name: z.string().describe('Human-readable name for this automation'),
         description: z.string().optional().describe('Description of what this automation does'),
@@ -85,13 +89,19 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
         trigger: z.object({
           type: z.string().describe('Trigger type'),
         }).passthrough().describe('Trigger configuration'),
-        conditions: z.any().optional().describe('Condition tree (single condition or AND/OR/NOT group)'),
-        actions: z.array(z.object({
-          type: z.string().describe('Action type'),
-          name: z.string().optional(),
-          continueOnError: z.boolean().optional(),
-          config: z.record(z.any()),
-        })).min(1).describe('Ordered list of actions to execute'),
+        components: z.array(z.object({
+          id: z.string().describe('Unique component ID'),
+          componentType: z.enum(['action', 'condition', 'branch', 'if_else']).describe('Component type'),
+          action: z.object({
+            type: z.string(),
+            name: z.string().optional(),
+            continueOnError: z.boolean().optional(),
+            config: z.record(z.any()),
+          }).optional(),
+          condition: z.any().optional(),
+          branch: z.any().optional(),
+          ifElse: z.any().optional(),
+        })).min(1).describe('Ordered component chain (actions, conditions, branches, if/else blocks)'),
         enabled: z.boolean().optional().default(true),
       }),
       handler: async (input) => {
@@ -102,8 +112,7 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
             workspaceId: input.workspaceId,
             enabled: input.enabled ?? true,
             trigger: input.trigger as any,
-            conditions: input.conditions as any,
-            actions: input.actions as any,
+            components: input.components as any,
             createdBy: 'mcp-agent',
           },
         });
@@ -118,15 +127,14 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
 
     {
       name: 'update_automation',
-      description: 'Update an existing automation. Only specified fields are changed.',
+      description: 'Update an existing automation. Only specified properties are changed.',
       inputSchema: z.object({
         automationId: z.string().uuid().describe('The automation ID to update'),
         name: z.string().optional(),
         description: z.string().optional(),
         enabled: z.boolean().optional(),
         trigger: z.any().optional(),
-        conditions: z.any().optional(),
-        actions: z.array(z.any()).optional(),
+        components: z.array(z.any()).optional(),
       }),
       handler: async (input) => {
         const { automationId, ...data } = input;
@@ -135,8 +143,7 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
         if (data.description !== undefined) updateData.description = data.description;
         if (data.enabled !== undefined) updateData.enabled = data.enabled;
         if (data.trigger !== undefined) updateData.trigger = data.trigger;
-        if (data.conditions !== undefined) updateData.conditions = data.conditions;
-        if (data.actions !== undefined) updateData.actions = data.actions;
+        if (data.components !== undefined) updateData.components = data.components;
 
         const automation = await prisma.automation.update({
           where: { id: automationId },
@@ -315,10 +322,10 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
           { type: 'automation.trigger', description: 'Chain another automation', config: { automationId: 'required' } },
         ],
         templateVariables: [
-          '{{trigger.item.id}}', '{{trigger.item.key}}', '{{trigger.item.attributes.FieldName}}',
-          '{{trigger.previous.FieldName}}', '{{trigger.user.name}}', '{{trigger.timestamp}}',
+          '{{trigger.item.id}}', '{{trigger.item.key}}', '{{trigger.item.attributes.AttributeName}}',
+          '{{trigger.previous.AttributeName}}', '{{trigger.user.name}}', '{{trigger.timestamp}}',
           '{{env.NOW}}', '{{env.TODAY}}', '{{context.variables.name}}',
-          '{{action[0].result.field}}', '{{oql:FROM Catalog SELECT COUNT(*)}}',
+          '{{action[0].result.property}}', '{{oql:FROM Catalog SELECT COUNT(*)}}',
         ],
       }),
     },
@@ -330,9 +337,9 @@ Actions support {{template}} variables: {{trigger.item.id}}, {{trigger.item.key}
       handler: async () => ({
         types: [
           { type: 'attribute', description: 'Compare item attribute value', operators: ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'in', 'is_null', 'changed_to', 'changed_from', 'matches_regex'] },
-          { type: 'oql', description: 'Passes if OQL query returns results', fields: { query: 'OQL query string', expectCount: 'optional exact count' } },
-          { type: 'reference', description: 'Check item references', fields: { direction: 'outbound|inbound', exists: 'boolean' } },
-          { type: 'template', description: 'Evaluate template expression as truthy', fields: { expression: 'template string' } },
+          { type: 'oql', description: 'Passes if OQL query returns results', config: { query: 'OQL query string', expectCount: 'optional exact count' } },
+          { type: 'reference', description: 'Check item references', config: { direction: 'outbound|inbound', exists: 'boolean' } },
+          { type: 'template', description: 'Evaluate template expression as truthy', config: { expression: 'template string' } },
         ],
         composition: { AND: 'All must pass', OR: 'Any must pass', NOT: 'Negates one condition' },
       }),
@@ -685,7 +692,7 @@ For STATUS: configure via catalog statusConfig`,
 
     {
       name: 'update_attribute',
-      description: 'Update attribute properties. Only specified fields are changed.',
+      description: 'Update attribute properties. Only specified values are changed.',
       inputSchema: z.object({
         attributeId: z.string().uuid(),
         name: z.string().optional(),

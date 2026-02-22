@@ -103,7 +103,7 @@ export class OnstaqExecutionSync {
       if (!execution) return;
 
       const triggerData = execution.triggerData as any;
-      const actionResults = (execution.actionResults as any[]) || [];
+      const componentResults = (execution.componentResults as any[]) || [];
 
       await this.onstaqClient.createItem(this.catalogId, {
         'Name': `${execution.automation.name} — ${execution.status}`,
@@ -111,13 +111,13 @@ export class OnstaqExecutionSync {
         'Trigger Type': triggerData?.type || 'unknown',
         'Execution Status': execution.status,
         'Duration (ms)': execution.durationMs?.toString() || '0',
-        'Actions Executed': actionResults.length.toString(),
+        'Actions Executed': componentResults.length.toString(),
         'Error': execution.error || '',
         'Details': JSON.stringify({
           executionId: execution.id,
           triggerSummary: triggerData?.type,
           itemKey: triggerData?.item?.key,
-          actionSummary: actionResults.map((a: any) => `${a.actionType}: ${a.status}`),
+          actionSummary: componentResults.map((a: any) => `${a.actionType}: ${a.status}`),
         }, null, 2),
         'Executed At': execution.startedAt.toISOString(),
       });
