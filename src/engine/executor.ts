@@ -109,12 +109,23 @@ export class AutomationExecutor {
       manualParameters: parameters,
     };
 
-    // If an itemId is passed, fetch the item so actions with useTriggeredItem work
+    // If an itemId or itemKey is passed, fetch the item so actions with useTriggeredItem work
     if (parameters?.itemId) {
       try {
         event.item = await this.onstaqClient.getItem(parameters.itemId);
       } catch (err: any) {
         logger.warn(`Could not fetch item ${parameters.itemId} for manual trigger: ${err.message}`);
+      }
+    } else if (parameters?.itemKey) {
+      try {
+        const items = await this.onstaqClient.listItems({ key: parameters.itemKey, workspaceId: automation.workspaceId });
+        if (items.data.length > 0) {
+          event.item = items.data[0];
+        } else {
+          logger.warn(`No item found with key ${parameters.itemKey} for manual trigger`);
+        }
+      } catch (err: any) {
+        logger.warn(`Could not fetch item by key ${parameters.itemKey} for manual trigger: ${err.message}`);
       }
     }
 
