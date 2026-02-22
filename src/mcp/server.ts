@@ -103,11 +103,10 @@ export async function startStdioTransport(server: McpServer): Promise<void> {
 }
 
 /**
- * Start MCP server with Streamable HTTP transport (for remote agents).
+ * Mount MCP Streamable HTTP routes on an existing Express app.
+ * Used in single-port mode (e.g., Railway deployment).
  */
-export function createHttpTransport(server: McpServer, port: number): express.Application {
-  const app = express();
-
+export function mountMcpRoutes(app: express.Application, server: McpServer): void {
   app.post('/mcp', async (req, res) => {
     try {
       const transport = new StreamableHTTPServerTransport({
@@ -126,10 +125,17 @@ export function createHttpTransport(server: McpServer, port: number): express.Ap
     }
   });
 
-  // Health check for MCP endpoint
   app.get('/mcp/health', (req, res) => {
     res.json({ status: 'ok', transport: 'streamable-http' });
   });
+}
 
+/**
+ * Create a standalone Express app for MCP Streamable HTTP transport.
+ * Used when running MCP on a dedicated port.
+ */
+export function createHttpTransport(server: McpServer, port: number): express.Application {
+  const app = express();
+  mountMcpRoutes(app, server);
   return app;
 }

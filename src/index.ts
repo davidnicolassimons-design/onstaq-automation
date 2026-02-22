@@ -7,7 +7,7 @@ import { PrismaClient } from '@prisma/client';
 import { OnstaqClient } from './onstaq/client';
 import { AutomationExecutor } from './engine/executor';
 import { createApiServer } from './api/server';
-import { createMcpServer, createHttpTransport } from './mcp/server';
+import { createMcpServer, createHttpTransport, mountMcpRoutes } from './mcp/server';
 import { logger } from './utils/logger';
 
 async function main() {
@@ -47,19 +47,33 @@ async function main() {
 
   // --- Start REST API ---
   const apiApp = createApiServer(prisma, onstaqClient, executor);
+
+  // --- MCP setup ---
+  const mcpServer = createMcpServer(prisma, onstaqClient, executor);
+
+  // Single-port mode: mount MCP on the main Express app (default for Railway / production).
+  // Separate-port mode: when MCP_HTTP_PORT is explicitly set and differs from PORT.
+  const useSeparateMcpPort = process.env.MCP_HTTP_PORT && MCP_HTTP_PORT !== PORT;
+
+  if (useSeparateMcpPort) {
+    const mcpApp = createHttpTransport(mcpServer, MCP_HTTP_PORT);
+    mcpApp.listen(MCP_HTTP_PORT, () => {
+      logger.info(`MCP HTTP transport listening on port ${MCP_HTTP_PORT}`);
+      logger.info(`  MCP endpoint: http://localhost:${MCP_HTTP_PORT}/mcp`);
+    });
+  } else {
+    mountMcpRoutes(apiApp, mcpServer);
+    logger.info('MCP HTTP transport mounted on main server at /mcp');
+  }
+
   apiApp.listen(PORT, () => {
     logger.info(`REST API listening on port ${PORT}`);
     logger.info(`  Health: http://localhost:${PORT}/api/health`);
     logger.info(`  Automations: http://localhost:${PORT}/api/automations`);
     logger.info(`  Executions: http://localhost:${PORT}/api/executions`);
-  });
-
-  // --- Start MCP HTTP transport ---
-  const mcpServer = createMcpServer(prisma, onstaqClient, executor);
-  const mcpApp = createHttpTransport(mcpServer, MCP_HTTP_PORT);
-  mcpApp.listen(MCP_HTTP_PORT, () => {
-    logger.info(`MCP HTTP transport listening on port ${MCP_HTTP_PORT}`);
-    logger.info(`  MCP endpoint: http://localhost:${MCP_HTTP_PORT}/mcp`);
+    if (!useSeparateMcpPort) {
+      logger.info(`  MCP endpoint: http://localhost:${PORT}/mcp`);
+    }
   });
 
   // --- Graceful shutdown ---

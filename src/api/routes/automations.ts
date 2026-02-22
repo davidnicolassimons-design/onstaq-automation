@@ -46,7 +46,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
   router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
     try {
       const automation = await prisma.automation.findUnique({
-        where: { id: req.params.id },
+        where: { id: req.params.id as string },
         include: {
           executions: {
             take: 10,
@@ -109,7 +109,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
   // ---- UPDATE automation ----
   router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const existing = await prisma.automation.findUnique({ where: { id: req.params.id } });
+      const existing = await prisma.automation.findUnique({ where: { id: req.params.id as string } });
       if (!existing) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Automation not found' } });
       }
@@ -132,7 +132,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
       if (data.executionOrder !== undefined) updateData.executionOrder = data.executionOrder;
 
       const automation = await prisma.automation.update({
-        where: { id: req.params.id },
+        where: { id: req.params.id as string },
         data: updateData,
       });
 
@@ -150,7 +150,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
   // ---- DELETE automation ----
   router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const existing = await prisma.automation.findUnique({ where: { id: req.params.id } });
+      const existing = await prisma.automation.findUnique({ where: { id: req.params.id as string } });
       if (!existing) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Automation not found' } });
       }
@@ -173,7 +173,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
   router.post('/:id/enable', async (req: AuthenticatedRequest, res: Response) => {
     try {
       const automation = await prisma.automation.update({
-        where: { id: req.params.id },
+        where: { id: req.params.id as string },
         data: { enabled: true },
       });
 
@@ -188,7 +188,7 @@ export function createAutomationsRouter(prisma: PrismaClient, executor: Automati
   router.post('/:id/disable', async (req: AuthenticatedRequest, res: Response) => {
     try {
       const automation = await prisma.automation.update({
-        where: { id: req.params.id },
+        where: { id: req.params.id as string },
         data: { enabled: false },
       });
 

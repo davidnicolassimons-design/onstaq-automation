@@ -4,9 +4,9 @@
   "description": "Automation engine for ONSTAQ - triggers, conditions, and actions for workflow automation",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "start": "prisma migrate deploy && node dist/index.js",
     "start:mcp": "node dist/mcp/stdio.js",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
