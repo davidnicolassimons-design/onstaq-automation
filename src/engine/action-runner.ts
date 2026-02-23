@@ -152,7 +152,19 @@ export class ActionRunner {
 
     const targetId = await this.resolveItemId(itemId, itemKey, useTriggeredItem, ctx);
     const resolvedAttributes = await this.templateResolver.resolveValue(attributes, ctx);
-    const item = await this.onstaqClient.updateItem(targetId, resolvedAttributes);
+
+    // Extract 'status' from attributes — EntityHub expects it as a top-level field, not an attribute
+    const extra: { status?: string | null } = {};
+    if ('status' in resolvedAttributes) {
+      extra.status = resolvedAttributes.status;
+      delete resolvedAttributes.status;
+    }
+
+    const item = await this.onstaqClient.updateItem(
+      targetId,
+      resolvedAttributes,
+      Object.keys(extra).length > 0 ? extra : undefined
+    );
 
     logger.info(`Updated item ${item.key}`);
     return { itemId: item.id, itemKey: item.key };

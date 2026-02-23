@@ -362,21 +362,31 @@ export class TriggerManager {
   ): Promise<void> {
     // Status is just an attribute — find the STATUS attribute and poll for changes
     const catalogId = trigger.catalogId || await this.resolveCatalogId(trigger.catalogName, automation.workspaceId);
-    if (!catalogId) return;
 
-    const attributes = await this.onstaqClient.listAttributes(catalogId);
-    const statusAttr = attributes.find((a) => a.type === 'STATUS');
-    if (!statusAttr) return;
+    // If no specific catalog, poll all catalogs in the workspace
+    const catalogIds: string[] = [];
+    if (catalogId) {
+      catalogIds.push(catalogId);
+    } else {
+      const allCatalogs = await this.onstaqClient.listCatalogs(automation.workspaceId);
+      catalogIds.push(...allCatalogs.map((c) => c.id));
+    }
 
-    const changedTrigger: AttributeChangedTrigger = {
-      type: 'attribute.changed',
-      catalogId,
-      attributeName: statusAttr.name,
-      from: trigger.from,
-      to: trigger.to,
-    };
+    for (const catId of catalogIds) {
+      const attributes = await this.onstaqClient.listAttributes(catId);
+      const statusAttr = attributes.find((a) => a.type === 'STATUS');
+      if (!statusAttr) continue;
 
-    await this.pollAttributeChanged(automation, changedTrigger, lastChecked, lastSeen);
+      const changedTrigger: AttributeChangedTrigger = {
+        type: 'attribute.changed',
+        catalogId: catId,
+        attributeName: statusAttr.name,
+        from: trigger.from,
+        to: trigger.to,
+      };
+
+      await this.pollAttributeChanged(automation, changedTrigger, lastChecked, lastSeen);
+    }
   }
 
   private async pollOqlMatch(

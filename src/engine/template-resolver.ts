@@ -138,6 +138,7 @@ export class TemplateResolver {
       case 'trigger':
         return this.resolveTriggerPath(path.slice(1), ctx);
 
+      case 'item':
       case 'currentItem':
         return this.resolveCurrentItemPath(path.slice(1), ctx);
 
