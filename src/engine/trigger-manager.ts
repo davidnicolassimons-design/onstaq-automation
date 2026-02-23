@@ -373,19 +373,25 @@ export class TriggerManager {
     }
 
     for (const catId of catalogIds) {
+      // Watch for changes to:
+      // 1. Top-level status field (tracked as "@status" in item history)
+      // 2. STATUS-type attributes (tracked by attribute name in history)
+      const watchFields: string[] = ['@status'];
+
       const attributes = await this.onstaqClient.listAttributes(catId);
       const statusAttr = attributes.find((a) => a.type === 'STATUS');
-      if (!statusAttr) continue;
+      if (statusAttr) {
+        watchFields.push(statusAttr.name);
+      }
 
-      const changedTrigger: AttributeChangedTrigger = {
-        type: 'attribute.changed',
+      // Poll for item updates filtered to status-related changes
+      const updatedTrigger: ItemUpdatedTrigger = {
+        type: 'item.updated',
         catalogId: catId,
-        attributeName: statusAttr.name,
-        from: trigger.from,
-        to: trigger.to,
+        attributes: watchFields,
       };
 
-      await this.pollAttributeChanged(automation, changedTrigger, lastChecked, lastSeen);
+      await this.pollItemUpdated(automation, updatedTrigger, lastChecked, lastSeen);
     }
   }
 
