@@ -384,14 +384,74 @@ export class TriggerManager {
         watchFields.push(statusAttr.name);
       }
 
-      // Poll for item updates filtered to status-related changes
-      const updatedTrigger: ItemUpdatedTrigger = {
-        type: 'item.updated',
+      // Poll for recently updated items
+      const result = await this.onstaqClient.listItems({
         catalogId: catId,
-        attributes: watchFields,
-      };
+        sortBy: 'updatedAt',
+        sortOrder: 'desc',
+        limit: 20,
+      });
 
-      await this.pollItemUpdated(automation, updatedTrigger, lastChecked, lastSeen);
+      for (const item of result.data) {
+        const updatedAt = new Date(item.updatedAt);
+        if (updatedAt <= lastChecked) continue;
+
+        const history = await this.onstaqClient.getHistory(item.id);
+        const recentChanges = history.filter((h) => new Date(h.createdAt) > lastChecked && h.action === 'UPDATED');
+
+        // Find the status change in recent history
+        let statusFrom: string | undefined;
+        let statusTo: string | undefined;
+
+        for (const h of recentChanges) {
+          const changes = (h.changes || {}) as Record<string, any>;
+          for (const field of watchFields) {
+            if (changes[field] && typeof changes[field] === 'object' && 'from' in changes[field]) {
+              statusFrom = changes[field].from;
+              statusTo = changes[field].to;
+              break;
+            }
+          }
+          if (statusTo !== undefined) break;
+        }
+
+        // No status change found in recent history
+        if (statusTo === undefined) continue;
+
+        // Check from/to filters from the trigger config
+        if (trigger.from && statusFrom?.toLowerCase() !== trigger.from.toLowerCase()) continue;
+        if (trigger.to && statusTo?.toLowerCase() !== trigger.to.toLowerCase()) continue;
+
+        const hash = this.hashEvent(`status.changed:${item.id}:${item.updatedAt}`);
+        if (lastSeen[hash]) continue;
+
+        // Build previous values
+        const previousValues: Record<string, any> = {};
+        const latestChange = recentChanges[0];
+        if (latestChange?.changes) {
+          for (const [field, change] of Object.entries(latestChange.changes as Record<string, any>)) {
+            if (change && typeof change === 'object' && 'from' in change) {
+              previousValues[field] = change.from;
+            }
+          }
+        }
+
+        const event: TriggerEvent = {
+          type: 'item.updated',
+          automationId: automation.id,
+          timestamp: new Date().toISOString(),
+          item,
+          previousValues,
+        };
+
+        await this.handler(event);
+        lastSeen[hash] = true;
+
+        await this.prisma.triggerState.update({
+          where: { automationId: automation.id },
+          data: { lastSeenData: lastSeen },
+        });
+      }
     }
   }
 
